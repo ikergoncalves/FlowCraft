@@ -32,7 +32,12 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 
 /**
  * Global editor shortcuts: V/R/T pick a tool, Delete/Backspace removes the
- * selection, Escape clears it, and 0 resets the view.
+ * selection, Ctrl/Cmd + A selects everything, Escape clears the selection, and
+ * 0 resets the view.
+ *
+ * Escape is also how a drag in progress is cancelled; the canvas claims it
+ * first, from a capture-phase listener, so a cancelled drag does not also lose
+ * its selection.
  *
  * Reads the store through `getState()` inside the handler so the listener can
  * be registered once instead of re-binding on every state change.
@@ -40,11 +45,22 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 export function useEditorShortcuts(): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return
       if (isEditableTarget(event.target)) return
 
-      const { selectedIds, setTool, removeBlocks, clearSelection, resetView } =
+      const { selectedIds, setTool, removeBlocks, clearSelection, resetView, selectAll } =
         useDiagramStore.getState()
+
+      // Ctrl/Cmd + A is the one accelerator this editor claims. Everything
+      // below is an unmodified key, so modified events bow out right after —
+      // no other browser shortcut gets swallowed.
+      if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+        if (event.key.toLowerCase() === 'a') {
+          event.preventDefault()
+          selectAll()
+        }
+        return
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return
 
       const nextTool = TOOL_KEYS[event.key.toLowerCase()]
       if (nextTool) {

@@ -13,6 +13,7 @@
   --grid-dot: #333a47;
   --block-fill: #232833;
   --block-stroke: #3b4351;
+  --selection-bounds: #6f7d94;
 
   color-scheme: dark;
   font-family:
@@ -141,6 +142,39 @@ body,
   stroke: var(--accent);
   stroke-width: 2;
   stroke-dasharray: 4 3;
+}
+
+/* Blocks are only grabbable with the Select tool; while a gesture is running
+ * the whole canvas shows the same grabbing cursor. */
+.canvas__svg--select .block {
+  cursor: move;
+}
+
+.canvas__svg--dragging .block,
+.canvas__svg--dragging .selection__handle {
+  cursor: inherit;
+}
+
+/* Selection chrome ------------------------------------------------------- */
+
+.marquee {
+  fill: rgb(76 141 255 / 12%);
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+/* Distinct from the per-block outline: solid and dimmer, so it reads as the
+ * envelope of the selection rather than as another block. */
+.selection__bounds {
+  stroke: var(--selection-bounds);
+  stroke-width: 1;
+}
+
+.selection__handle {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 1.5;
 }
 
 /* Text editing overlay --------------------------------------------------- */

@@ -7,19 +7,17 @@ const FONT_SIZE = 14
 interface BlockViewProps {
   block: Block
   selected: boolean
-  /** True while the Select tool is active; other tools click through to create. */
-  interactive: boolean
-  onSelect: (id: string) => void
   onEdit: (id: string) => void
 }
 
-function BlockViewImpl({
-  block,
-  selected,
-  interactive,
-  onSelect,
-  onEdit,
-}: BlockViewProps) {
+/**
+ * One block, and nothing else.
+ *
+ * Selecting and dragging are not handled here on purpose: the canvas owns a
+ * single pointer-down handler that hit-tests via `data-block-id`, so a diagram
+ * with a thousand blocks still has one listener rather than a thousand.
+ */
+function BlockViewImpl({ block, selected, onEdit }: BlockViewProps) {
   const centerX = block.x + block.width / 2
   const centerY = block.y + block.height / 2
 
@@ -29,16 +27,6 @@ function BlockViewImpl({
       data-testid="block"
       data-block-type={block.type}
       className="block"
-      onPointerDown={(event) => {
-        if (!interactive) return
-        event.stopPropagation()
-        onSelect(block.id)
-      }}
-      onClick={(event) => {
-        // Let the click reach the canvas when a creation tool is active, so
-        // the user can drop a new block on top of an existing one.
-        if (interactive) event.stopPropagation()
-      }}
       onDoubleClick={(event) => {
         event.stopPropagation()
         onEdit(block.id)

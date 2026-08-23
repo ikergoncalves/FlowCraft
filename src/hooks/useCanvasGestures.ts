@@ -32,6 +32,14 @@ const BUTTON_LEFT = 0
 const BUTTON_MIDDLE = 1
 
 /**
+ * Pixels the pointer must travel before a press counts as a drag rather than
+ * a click. Those first pixels are also subtracted from the reported movement,
+ * so nothing jumps when the threshold is crossed. Exported because it is a
+ * visible part of the gesture contract, and tests assert against it.
+ */
+export const DRAG_TAP_THRESHOLD = 3
+
+/**
  * Everything a gesture needs to remember from the instant it began.
  *
  * Each mode works from this snapshot plus the pointer's *accumulated* screen
@@ -325,6 +333,7 @@ export function useCanvasGestures(
         // means what is decided in `beginSession`.
         pointer: { buttons: -1 },
         filterTaps: true,
+        tapsThreshold: DRAG_TAP_THRESHOLD,
       },
       pinch: {
         scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM },

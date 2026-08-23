@@ -31,6 +31,19 @@ export function worldToScreen(point: Point, viewport: Viewport, rect: CanvasRect
 }
 
 /**
+ * A screen-pixel drag vector expressed in world units.
+ *
+ * Dividing by the zoom is what keeps a dragged block glued to the cursor at
+ * any zoom level: at 2× the pointer covers twice the pixels per world unit.
+ * Unlike `screenToWorld` this takes no `CanvasRect` — a delta is translation
+ * free, so the canvas offset cancels out.
+ */
+export function screenDeltaToWorld(delta: Point, zoom: number): Point {
+  const safeZoom = clampZoom(zoom)
+  return { x: delta.x / safeZoom, y: delta.y / safeZoom }
+}
+
+/**
  * The `viewBox` that makes an `<svg>` of `rect`'s pixel size show exactly the
  * world region described by `viewport`. Pan/zoom lives here rather than in a
  * CSS transform so that world units stay the SVG user-space units.

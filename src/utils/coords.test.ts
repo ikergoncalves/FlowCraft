@@ -8,6 +8,7 @@ import {
   clampZoom,
   gridStepForZoom,
   panByScreenDelta,
+  screenDeltaToWorld,
   screenToWorld,
   viewBoxFor,
   worldToScreen,
@@ -226,5 +227,47 @@ describe('gridStepForZoom', () => {
       const ratio = gridStepForZoom(zoom) / GRID_SIZE
       expect(Number.isInteger(Math.log2(ratio))).toBe(true)
     }
+  })
+})
+
+describe('screenDeltaToWorld', () => {
+  it('passes a delta straight through at 100%', () => {
+    expect(screenDeltaToWorld({ x: 40, y: -25 }, 1)).toEqual({ x: 40, y: -25 })
+  })
+
+  it('shrinks the world delta when zoomed in', () => {
+    expect(screenDeltaToWorld({ x: 40, y: -25 }, 2)).toEqual({ x: 20, y: -12.5 })
+    expect(screenDeltaToWorld({ x: 40, y: -25 }, 4)).toEqual({ x: 10, y: -6.25 })
+  })
+
+  it('grows the world delta when zoomed out', () => {
+    expect(screenDeltaToWorld({ x: 40, y: -25 }, 0.5)).toEqual({ x: 80, y: -50 })
+  })
+
+  it('is the inverse of the world -> screen scaling', () => {
+    const zoom = 2.5
+    const world = screenDeltaToWorld({ x: 37, y: 91 }, zoom)
+    expect(world.x * zoom).toBeCloseTo(37, 10)
+    expect(world.y * zoom).toBeCloseTo(91, 10)
+  })
+
+  it('agrees with the difference of two converted screen points', () => {
+    const viewport: Viewport = { x: 120, y: -40, zoom: 3 }
+    const from: Point = { x: 200, y: 300 }
+    const to: Point = { x: 260, y: 270 }
+
+    const a = screenToWorld(from, viewport, rect)
+    const b = screenToWorld(to, viewport, rect)
+    const delta = screenDeltaToWorld(
+      { x: to.x - from.x, y: to.y - from.y },
+      viewport.zoom,
+    )
+
+    expect(delta.x).toBeCloseTo(b.x - a.x, 10)
+    expect(delta.y).toBeCloseTo(b.y - a.y, 10)
+  })
+
+  it('clamps a nonsensical zoom rather than dividing by zero', () => {
+    expect(Number.isFinite(screenDeltaToWorld({ x: 10, y: 10 }, 0).x)).toBe(true)
   })
 })

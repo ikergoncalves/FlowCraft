@@ -26,8 +26,9 @@ describe('addBlock', () => {
   })
 
   it('gives every block a unique id', () => {
-    const ids = Array.from({ length: 50 }, (_, index) =>
-      store().addBlock(makeBlockAt('rect', { x: index, y: index })).id,
+    const ids = Array.from(
+      { length: 50 },
+      (_, index) => store().addBlock(makeBlockAt('rect', { x: index, y: index })).id,
     )
 
     expect(new Set(ids).size).toBe(ids.length)
@@ -41,7 +42,10 @@ describe('addBlock', () => {
   })
 
   it('honours an explicit id, so Phase 4 can restore a removed block', () => {
-    const block = store().addBlock({ ...makeBlockAt('rect', { x: 0, y: 0 }), id: 'fixed-id' })
+    const block = store().addBlock({
+      ...makeBlockAt('rect', { x: 0, y: 0 }),
+      id: 'fixed-id',
+    })
 
     expect(block.id).toBe('fixed-id')
     expect(store().blocks['fixed-id']).toBeDefined()

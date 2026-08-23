@@ -99,7 +99,8 @@ export const useDiagramStore = create<DiagramState>()((set) => ({
 
   select: (ids) => set({ selectedIds: typeof ids === 'string' ? [ids] : [...ids] }),
 
-  clearSelection: () => set((state) => (state.selectedIds.length ? { selectedIds: [] } : state)),
+  clearSelection: () =>
+    set((state) => (state.selectedIds.length ? { selectedIds: [] } : state)),
 
   setTool: (tool) => set({ tool }),
 

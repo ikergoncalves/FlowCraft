@@ -9,14 +9,25 @@ const TOOL_KEYS: Record<string, Tool> = {
   t: 'text',
 }
 
+/** Elements that swallow keystrokes on their own. */
+const EDITABLE_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT'])
+
 /**
  * True when the event came from somewhere the user is typing, in which case
  * editor shortcuts must stay out of the way.
  */
 export function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  if (target.isContentEditable) return true
-  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+  if (!(target instanceof Element)) return false
+  if (EDITABLE_TAGS.has(target.tagName)) return true
+
+  // `isContentEditable` is the browser's own answer and already accounts for
+  // inheritance, but jsdom does not implement it (it reads `undefined`), so
+  // the attribute is the fallback. `closest` covers descendants of an
+  // editable region the same way `isContentEditable` would, and an explicit
+  // `contenteditable="false"` correctly opts back out.
+  if (target instanceof HTMLElement && target.isContentEditable) return true
+  const editable = target.closest('[contenteditable]')
+  return editable !== null && editable.getAttribute('contenteditable') !== 'false'
 }
 
 /**

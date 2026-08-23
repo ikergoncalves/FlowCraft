@@ -715,3 +715,43 @@ describe('panning', () => {
     expect(screen.queryAllByTestId('block')).toHaveLength(0)
   })
 })
+
+describe('gesture precedence', () => {
+  it('pans instead of marqueeing while space is held', () => {
+    render(<App />)
+    seed({ x: 50, y: 50 })
+    fireEvent.keyDown(document.body, { code: 'Space' })
+
+    dragFrom(getCanvas(), { x: 400, y: 300 }, { x: 60, y: 40 })
+
+    expect(screen.queryByTestId('marquee')).not.toBeInTheDocument()
+    expect(useDiagramStore.getState().viewport.x).toBeCloseTo(-applied(60), 6)
+
+    fireEvent.keyUp(document.body, { code: 'Space' })
+  })
+
+  it('pans instead of moving when space is held over a block', () => {
+    render(<App />)
+    const block = required(seed({ x: 50, y: 50 })[0], 'block')
+    fireEvent.keyDown(document.body, { code: 'Space' })
+
+    dragFrom(blockElement(block.id), { x: 80, y: 70 }, { x: 60, y: 40 })
+
+    expect(blockAt(block.id)).toMatchObject({ x: 50, y: 50 })
+    expect(useDiagramStore.getState().viewport.x).toBeCloseTo(-applied(60), 6)
+
+    fireEvent.keyUp(document.body, { code: 'Space' })
+  })
+
+  it('still clears the selection with Escape when no drag is in flight', () => {
+    render(<App />)
+    seed({ x: 0, y: 0 }, { x: 200, y: 0 })
+    act(() => {
+      useDiagramStore.getState().selectAll()
+    })
+
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(selection()).toEqual([])
+  })
+})

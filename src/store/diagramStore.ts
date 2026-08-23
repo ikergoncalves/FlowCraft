@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { Block, Tool, Viewport } from '../types'
+import type { Block, Point, Tool, Viewport } from '../types'
 import { DEFAULT_VIEWPORT } from '../utils/coords'
 import { createId } from '../utils/id'
 
@@ -33,14 +33,22 @@ export interface DiagramState {
 
   addBlock: (init: BlockInit) => Block
   updateBlock: (id: string, patch: BlockPatch) => void
+  updateBlocks: (patches: Record<string, BlockPatch>) => void
+  setBlockPositions: (positions: Record<string, Point>) => void
   removeBlock: (id: string) => void
   removeBlocks: (ids: readonly string[]) => void
   setViewport: (viewport: Viewport) => void
   select: (ids: string | readonly string[]) => void
+  addToSelection: (ids: string | readonly string[]) => void
+  toggleSelection: (id: string) => void
+  selectAll: () => void
   clearSelection: () => void
   setTool: (tool: Tool) => void
   resetView: () => void
 }
+
+const toIdList = (ids: string | readonly string[]): string[] =>
+  typeof ids === 'string' ? [ids] : [...ids]
 
 /**
  * Every diagram mutation is a named action here — no inline `set()` in
@@ -72,6 +80,39 @@ export const useDiagramStore = create<DiagramState>()((set) => ({
       return { blocks: { ...state.blocks, [id]: { ...current, ...patch } } }
     }),
 
+  /**
+   * Patches many blocks in one state update. A drag touching N blocks would
+   * otherwise fire N `updateBlock` calls per pointer frame, and every one of
+   * them re-renders every subscriber.
+   */
+  updateBlocks: (patches) =>
+    set((state) => {
+      const blocks = { ...state.blocks }
+      let changed = false
+
+      for (const [id, patch] of Object.entries(patches)) {
+        const current = blocks[id]
+        if (!current) continue
+        blocks[id] = { ...current, ...patch }
+        changed = true
+      }
+
+      return changed ? { blocks } : state
+    }),
+
+  /**
+   * Absolute positions rather than deltas, on purpose.
+   *
+   * A drag applies `snapshot + accumulated delta` every frame, so absolute
+   * coordinates are what the caller already holds; they are idempotent, so a
+   * repeated or replayed frame cannot drift; and Phase 4 inverts the whole
+   * gesture by replaying the snapshot through this very action, with no
+   * separate inverse operation to get wrong.
+   */
+  setBlockPositions: (positions) => {
+    useDiagramStore.getState().updateBlocks(positions)
+  },
+
   removeBlock: (id) => {
     useDiagramStore.getState().removeBlocks([id])
   },
@@ -97,7 +138,28 @@ export const useDiagramStore = create<DiagramState>()((set) => ({
 
   setViewport: (viewport) => set({ viewport }),
 
-  select: (ids) => set({ selectedIds: typeof ids === 'string' ? [ids] : [...ids] }),
+  select: (ids) => set({ selectedIds: toIdList(ids) }),
+
+  /** Adds ids to the selection, skipping the ones already in it. */
+  addToSelection: (ids) =>
+    set((state) => {
+      const missing = toIdList(ids).filter((id) => !state.selectedIds.includes(id))
+      return missing.length ? { selectedIds: [...state.selectedIds, ...missing] } : state
+    }),
+
+  /** Flips one id in or out of the selection — shift-click's whole job. */
+  toggleSelection: (id) =>
+    set((state) => ({
+      selectedIds: state.selectedIds.includes(id)
+        ? state.selectedIds.filter((selected) => selected !== id)
+        : [...state.selectedIds, id],
+    })),
+
+  selectAll: () =>
+    set((state) => ({
+      // blockOrder is already every live id, in paint order.
+      selectedIds: [...state.blockOrder],
+    })),
 
   clearSelection: () =>
     set((state) => (state.selectedIds.length ? { selectedIds: [] } : state)),

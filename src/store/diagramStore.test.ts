@@ -186,3 +186,206 @@ describe('tool', () => {
     expect(store().tool).toBe('rect')
   })
 })
+
+describe('updateBlocks', () => {
+  it('patches several blocks in one state update', () => {
+    const a = store().addBlock(makeBlockAt('rect', { x: 0, y: 0 }))
+    const b = store().addBlock(makeBlockAt('rect', { x: 100, y: 0 }))
+    let updates = 0
+    const unsubscribe = useDiagramStore.subscribe(() => {
+      updates += 1
+    })
+
+    store().updateBlocks({ [a.id]: { text: 'A' }, [b.id]: { text: 'B' } })
+    unsubscribe()
+
+    expect(updates).toBe(1)
+    expect(store().blocks[a.id]?.text).toBe('A')
+    expect(store().blocks[b.id]?.text).toBe('B')
+  })
+
+  it('touches only the targeted blocks', () => {
+    const a = store().addBlock(makeBlockAt('rect', { x: 0, y: 0 }))
+    const b = store().addBlock(makeBlockAt('rect', { x: 100, y: 0 }))
+    const untouched = store().blocks[b.id]
+
+    store().updateBlocks({ [a.id]: { x: 42 } })
+
+    expect(store().blocks[a.id]?.x).toBe(42)
+    expect(store().blocks[b.id]).toBe(untouched)
+  })
+
+  it('skips unknown ids and leaves the known ones patched', () => {
+    const a = store().addBlock(makeBlockAt('rect', { x: 0, y: 0 }))
+
+    store().updateBlocks({ [a.id]: { text: 'kept' }, ghost: { text: 'ignored' } })
+
+    expect(store().blocks[a.id]?.text).toBe('kept')
+    expect(store().blocks.ghost).toBeUndefined()
+    expect(store().blockOrder).toEqual([a.id])
+  })
+
+  it('is a no-op when nothing matches', () => {
+    store().addBlock(makeBlockAt('rect', { x: 0, y: 0 }))
+    const before = store().blocks
+
+    store().updateBlocks({ ghost: { text: 'nope' } })
+    store().updateBlocks({})
+
+    expect(store().blocks).toBe(before)
+  })
+})
+
+describe('setBlockPositions', () => {
+  it('moves blocks to absolute positions without touching their size', () => {
+    const a = store().addBlock(makeBlockAt('rect', { x: 0, y: 0 }))
+
+    store().setBlockPositions({ [a.id]: { x: 250, y: -30 } })
+
+    expect(store().blocks[a.id]).toMatchObject({
+      x: 250,
+      y: -30,
+      width: a.width,
+      height: a.height,
+    })
+  })
+
+  it('preserves the relative distances when moving N blocks by one delta', () => {
+    const a = store().addBlock(makeBlockAt('rect', { x: 0, y: 0 }))
+    const b = store().addBlock(makeBlockAt('rect', { x: 300, y: 120 }))
+    const c = store().addBlock(makeBlockAt('text', { x: -80, y: 40 }))
+    const snapshot = [a, b, c].map((block) => ({ id: block.id, x: block.x, y: block.y }))
+    const delta = { x: 37.5, y: -12.25 }
+
+    store().setBlockPositions(
+      Object.fromEntries(
+        snapshot.map(({ id, x, y }) => [id, { x: x + delta.x, y: y + delta.y }]),
+      ),
+    )
+
+    const moved = snapshot.map(({ id }) => store().blocks[id])
+    for (const [index, block] of moved.entries()) {
+      expect(block?.x).toBeCloseTo((snapshot[index]?.x ?? 0) + delta.x, 10)
+      expect(block?.y).toBeCloseTo((snapshot[index]?.y ?? 0) + delta.y, 10)
+    }
+    // Pairwise gaps survive the move, which is the whole point of applying a
+    // shared delta to a snapshot rather than nudging each block in turn.
+    expect((moved[1]?.x ?? 0) - (moved[0]?.x ?? 0)).toBeCloseTo(
+      (snapshot[1]?.x ?? 0) - (snapshot[0]?.x ?? 0),
+      10,
+    )
+    expect((moved[2]?.y ?? 0) - (moved[1]?.y ?? 0)).toBeCloseTo(
+      (snapshot[2]?.y ?? 0) - (snapshot[1]?.y ?? 0),
+      10,
+    )
+  })
+
+  it('is idempotent, so a replayed frame cannot drift', () => {
+    const a = store().addBlock(makeBlockAt('rect', { x: 0, y: 0 }))
+    const positions = { [a.id]: { x: 12.3, y: 45.6 } }
+
+    store().setBlockPositions(positions)
+    store().setBlockPositions(positions)
+    store().setBlockPositions(positions)
+
+    expect(store().blocks[a.id]).toMatchObject({ x: 12.3, y: 45.6 })
+  })
+
+  it('restores a snapshot verbatim, which is how a cancelled drag rewinds', () => {
+    const a = store().addBlock(makeBlockAt('rect', { x: 10, y: 20 }))
+    const b = store().addBlock(makeBlockAt('rect', { x: 90, y: 10 }))
+    const snapshot = {
+      [a.id]: { x: a.x, y: a.y },
+      [b.id]: { x: b.x, y: b.y },
+    }
+
+    store().setBlockPositions({ [a.id]: { x: 999, y: 999 }, [b.id]: { x: 0, y: 0 } })
+    store().setBlockPositions(snapshot)
+
+    expect(store().blocks[a.id]).toMatchObject(snapshot[a.id] ?? {})
+    expect(store().blocks[b.id]).toMatchObject(snapshot[b.id] ?? {})
+  })
+})
+
+describe('addToSelection', () => {
+  it('adds ids without dropping the existing selection', () => {
+    store().select(['a'])
+    store().addToSelection(['b', 'c'])
+    expect(store().selectedIds).toEqual(['a', 'b', 'c'])
+  })
+
+  it('accepts a single id', () => {
+    store().select(['a'])
+    store().addToSelection('b')
+    expect(store().selectedIds).toEqual(['a', 'b'])
+  })
+
+  it('never duplicates an id already selected', () => {
+    store().select(['a', 'b'])
+    store().addToSelection(['b', 'c'])
+    expect(store().selectedIds).toEqual(['a', 'b', 'c'])
+  })
+
+  it('does not churn state when everything is already selected', () => {
+    store().select(['a', 'b'])
+    const before = store().selectedIds
+    store().addToSelection(['a', 'b'])
+    expect(store().selectedIds).toBe(before)
+  })
+})
+
+describe('toggleSelection', () => {
+  it('adds an id that was not selected', () => {
+    store().select(['a'])
+    store().toggleSelection('b')
+    expect(store().selectedIds).toEqual(['a', 'b'])
+  })
+
+  it('removes an id that was selected, keeping the rest', () => {
+    store().select(['a', 'b', 'c'])
+    store().toggleSelection('b')
+    expect(store().selectedIds).toEqual(['a', 'c'])
+  })
+
+  it('round-trips back to the original selection', () => {
+    store().select(['a'])
+    store().toggleSelection('b')
+    store().toggleSelection('b')
+    expect(store().selectedIds).toEqual(['a'])
+  })
+
+  it('works from an empty selection', () => {
+    store().toggleSelection('a')
+    expect(store().selectedIds).toEqual(['a'])
+  })
+})
+
+describe('selectAll', () => {
+  it('selects every block, in paint order', () => {
+    const ids = ['rect', 'text', 'rect'].map(
+      (type, index) =>
+        store().addBlock(makeBlockAt(type as 'rect' | 'text', { x: index * 50, y: 0 }))
+          .id,
+    )
+
+    store().selectAll()
+
+    expect(store().selectedIds).toEqual(ids)
+  })
+
+  it('selects nothing on an empty diagram', () => {
+    store().select(['stale'])
+    store().selectAll()
+    expect(store().selectedIds).toEqual([])
+  })
+
+  it('replaces a partial selection rather than appending to it', () => {
+    const a = store().addBlock(makeBlockAt('rect', { x: 0, y: 0 }))
+    const b = store().addBlock(makeBlockAt('rect', { x: 50, y: 0 }))
+    store().select([b.id])
+
+    store().selectAll()
+
+    expect(store().selectedIds).toEqual([a.id, b.id])
+  })
+})

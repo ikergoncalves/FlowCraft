@@ -8,8 +8,10 @@ import {
 } from 'react'
 import { useGesture } from '@use-gesture/react'
 import { useDiagramStore, type DiagramState } from '../store/diagramStore'
-import type { CanvasRect, Point } from '../types'
+import type { AnchorSide, Block, CanvasRect, Point } from '../types'
+import { ANCHOR_SIDES } from '../types'
 import {
+  GRID_SIZE,
   MAX_ZOOM,
   MIN_ZOOM,
   panByScreenDelta,
@@ -21,11 +23,14 @@ import {
 import {
   RESIZE_HANDLES,
   normalizeRect,
+  rectContainsPoint,
   rectsIntersect,
   resizeRect,
   type Rect,
   type ResizeHandle,
 } from '../utils/geometry'
+import { snapPoint } from '../utils/snap'
+import type { ConnectDraft } from '../components/GhostConnection'
 
 /** `PointerEvent.button` — which button changed state, not a bitmask. */
 const BUTTON_LEFT = 0
@@ -54,9 +59,11 @@ export const DRAG_TAP_THRESHOLD = 3
 type DragSession =
   | { mode: 'none' }
   | { mode: 'pan' }
-  | { mode: 'move'; origin: Record<string, Point> }
+  /** `anchorId` is the block the pointer actually grabbed — the one snap follows. */
+  | { mode: 'move'; origin: Record<string, Point>; anchorId: string }
   | { mode: 'resize'; id: string; handle: ResizeHandle; rect: Rect }
   | { mode: 'marquee'; originWorld: Point; additive: boolean }
+  | { mode: 'connect'; sourceId: string; sourceAnchor: AnchorSide }
 
 /** The mode kept in the session ref and consulted on every later frame. */
 export type DragMode = DragSession['mode']
@@ -68,6 +75,8 @@ export interface CanvasGestures {
   onPointerDown: (event: ReactPointerEvent<SVGSVGElement>) => void
   /** The live marquee box in world space, or `null` when none is being drawn. */
   marquee: Rect | null
+  /** The connection being dragged out of a port, or `null` when none is. */
+  connectDraft: ConnectDraft | null
   /** True while a gesture is actually moving — drives the grabbing cursor. */
   dragging: boolean
   /**
@@ -96,6 +105,10 @@ function attributeOf(target: EventTarget | null, attribute: string): string | nu
   return target.closest(`[${attribute}]`)?.getAttribute(attribute) ?? null
 }
 
+function isAnchorSide(value: string): value is AnchorSide {
+  return (ANCHOR_SIDES as readonly string[]).includes(value)
+}
+
 /** Where every selected block sits right now — the seed for a move. */
 function positionSnapshot(state: DiagramState): Record<string, Point> {
   const origin: Record<string, Point> = {}
@@ -104,6 +117,37 @@ function positionSnapshot(state: DiagramState): Record<string, Point> {
     if (block) origin[id] = { x: block.x, y: block.y }
   }
   return origin
+}
+
+/**
+ * The snap step this frame should use, or `null` for no snapping.
+ *
+ * Alt inverts whatever the toolbar says, for the duration of the gesture only.
+ * It is read here, from the live gesture state, rather than through
+ * `useEditorShortcuts` — that hook ignores `altKey` on purpose, so that held
+ * modifiers never leak into the global shortcut table.
+ */
+function snapStepFor(altKey: boolean): number | null {
+  const enabled = useDiagramStore.getState().snapToGrid !== altKey
+  return enabled ? GRID_SIZE : null
+}
+
+/**
+ * The topmost block containing `point`, by geometry rather than by `closest()`.
+ *
+ * Hit testing a drop target cannot go through `event.target`: once a drag
+ * starts the pointer is captured by the `<svg>`, so every later event reports
+ * the canvas itself no matter what is underneath. Walking `blockOrder`
+ * backwards gives the block painted last, which is the one the user sees on
+ * top.
+ */
+function blockUnder(state: DiagramState, point: Point): Block | null {
+  for (let i = state.blockOrder.length - 1; i >= 0; i -= 1) {
+    const id = state.blockOrder[i]
+    const block = id === undefined ? undefined : state.blocks[id]
+    if (block && rectContainsPoint(block, point)) return block
+  }
+  return null
 }
 
 /**
@@ -125,6 +169,8 @@ export function useCanvasGestures(
   const sessionRef = useRef<DragSession>(IDLE)
   const marqueeRef = useRef<Rect | null>(null)
   const [marquee, setMarquee] = useState<Rect | null>(null)
+  const draftRef = useRef<ConnectDraft | null>(null)
+  const [connectDraft, setConnectDraft] = useState<ConnectDraft | null>(null)
   const [dragging, setDragging] = useState(false)
   // Set once a gesture actually moves, so the click that ends it is ignored.
   const movedRef = useRef(false)
@@ -132,6 +178,11 @@ export function useCanvasGestures(
   const showMarquee = useCallback((rect: Rect | null) => {
     marqueeRef.current = rect
     setMarquee(rect)
+  }, [])
+
+  const showDraft = useCallback((draft: ConnectDraft | null) => {
+    draftRef.current = draft
+    setConnectDraft(draft)
   }, [])
 
   // Deliberately not memoised: it closes over `measure`, whose identity
@@ -156,6 +207,25 @@ export function useCanvasGestures(
     // With a creation tool there is nothing to select or move, so a drag over
     // the canvas keeps its Phase 1 meaning.
     if (state.tool !== 'select') return { mode: 'pan' }
+
+    // Ports are checked before anything else: they sit on a block's edge, so
+    // any later test would happily claim the same press.
+    const portSide = attributeOf(event.target, 'data-port-side')
+    const portBlock = attributeOf(event.target, 'data-port-block')
+    if (portSide !== null && isAnchorSide(portSide) && portBlock !== null) {
+      if (portBlock in state.blocks) {
+        return { mode: 'connect', sourceId: portBlock, sourceAnchor: portSide }
+      }
+    }
+
+    const connectionId = attributeOf(event.target, 'data-connection-id')
+    if (connectionId !== null && connectionId in state.connections) {
+      // Selecting an arrow is the whole gesture — arrows are not draggable,
+      // their geometry belongs to the blocks they join.
+      if (isAdditive(event)) state.toggleConnectionSelection(connectionId)
+      else state.selectConnections(connectionId)
+      return IDLE
+    }
 
     const handle = attributeOf(event.target, 'data-resize-handle')
     if (handle !== null && isResizeHandle(handle)) {
@@ -183,7 +253,11 @@ export function useCanvasGestures(
       // Grabbing an unselected block replaces the selection with it; grabbing
       // one that is already selected moves the whole selection.
       if (!state.selectedIds.includes(blockId)) state.select(blockId)
-      return { mode: 'move', origin: positionSnapshot(useDiagramStore.getState()) }
+      return {
+        mode: 'move',
+        origin: positionSnapshot(useDiagramStore.getState()),
+        anchorId: blockId,
+      }
     }
 
     return {
@@ -197,18 +271,43 @@ export function useCanvasGestures(
     }
   }
 
-  /** Applies the marquee to the selection and tears the gesture down. */
+  /**
+   * Commits whatever the gesture was building and tears it down.
+   *
+   * This is the one place a gesture's result reaches the store as a finished
+   * thing, which makes it Phase 4's hook for emitting a single Command per
+   * gesture rather than one per frame.
+   */
   function endSession(shiftKey: boolean): void {
     const session = sessionRef.current
     const rect = marqueeRef.current
+    const draft = draftRef.current
     sessionRef.current = IDLE
     setDragging(false)
     showMarquee(null)
+    showDraft(null)
+
+    if (session.mode === 'connect') {
+      // Released over empty canvas, or over the source itself: no connection,
+      // no complaint. The store rejects a self-link anyway; bailing here keeps
+      // the intent explicit.
+      const target = draft?.target
+      if (!target || target.id === session.sourceId) return
+      useDiagramStore.getState().addConnection({
+        sourceId: session.sourceId,
+        targetId: target.id,
+        sourceAnchor: session.sourceAnchor,
+      })
+      return
+    }
 
     // A marquee that never moved is a plain click; the click handler owns it.
     if (session.mode !== 'marquee' || rect === null) return
 
     const state = useDiagramStore.getState()
+    // Blocks only. A marquee that also swept up every arrow crossing it would
+    // make Delete unpredictable, and connections have no geometry of their own
+    // to move or resize once selected.
     const hits = state.blockOrder.filter((id) => {
       const block = state.blocks[id]
       return block !== undefined && rectsIntersect(rect, block)
@@ -231,6 +330,9 @@ export function useCanvasGestures(
     sessionRef.current = IDLE
     setDragging(false)
     showMarquee(null)
+    // A cancelled connect drag has nothing to undo — the connection was never
+    // created — so dropping the ghost is the whole rewind.
+    showDraft(null)
 
     const state = useDiagramStore.getState()
     if (session.mode === 'move') {
@@ -240,7 +342,7 @@ export function useCanvasGestures(
     }
     // A pan has nothing to rewind: the viewport is view state, not document
     // state, and restoring it would also undo any zoom done mid-pan.
-  }, [showMarquee])
+  }, [showMarquee, showDraft])
 
   useGesture(
     {
@@ -274,6 +376,7 @@ export function useCanvasGestures(
         active,
         first,
         shiftKey,
+        altKey,
       }) => {
         if (!active) {
           endSession(shiftKey)
@@ -315,9 +418,31 @@ export function useCanvasGestures(
 
           case 'move': {
             const delta = screenDeltaToWorld(travel, viewport.zoom)
+            const step = snapStepFor(altKey)
+            const anchorStart = session.origin[session.anchorId]
+
+            /*
+             * Snap the block the user grabbed, then shift the rest of the
+             * selection by that same corrected delta.
+             *
+             * Snapping each block on its own would pull them all onto the
+             * lattice independently and quietly collapse the gaps between
+             * them — a selection of blocks 30 units apart would end up 20 or
+             * 40 apart. Deriving one delta from one block keeps the whole
+             * selection rigid, which is what a move is supposed to be.
+             */
+            let effective = delta
+            if (step !== null && anchorStart) {
+              const snapped = snapPoint(
+                { x: anchorStart.x + delta.x, y: anchorStart.y + delta.y },
+                step,
+              )
+              effective = { x: snapped.x - anchorStart.x, y: snapped.y - anchorStart.y }
+            }
+
             const positions: Record<string, Point> = {}
             for (const [id, start] of Object.entries(session.origin)) {
-              positions[id] = { x: start.x + delta.x, y: start.y + delta.y }
+              positions[id] = { x: start.x + effective.x, y: start.y + effective.y }
             }
             useDiagramStore.getState().setBlockPositions(positions)
             return
@@ -325,12 +450,33 @@ export function useCanvasGestures(
 
           case 'resize': {
             const delta = screenDeltaToWorld(travel, viewport.zoom)
+            const step = snapStepFor(altKey)
             useDiagramStore.getState().updateBlock(
               session.id,
               resizeRect(session.rect, session.handle, delta, {
                 preserveAspect: shiftKey,
+                // Shift means "exact ratio"; snapping both edges would break
+                // it, so the two modifiers do not stack.
+                ...(step !== null && !shiftKey ? { snapStep: step } : {}),
               }),
             )
+            return
+          }
+
+          case 'connect': {
+            const state = useDiagramStore.getState()
+            const source = state.blocks[session.sourceId]
+            if (!source) return
+
+            const pointer = screenToWorld({ x: px, y: py }, viewport, measure())
+            const hovered = blockUnder(state, pointer)
+            showDraft({
+              source,
+              sourceAnchor: session.sourceAnchor,
+              pointer,
+              // The source is not a legal target, so it never highlights.
+              target: hovered && hovered.id !== session.sourceId ? hovered : null,
+            })
             return
           }
 
@@ -384,5 +530,5 @@ export function useCanvasGestures(
     return moved
   }, [])
 
-  return { onPointerDown, marquee, dragging, consumeDragClick }
+  return { onPointerDown, marquee, connectDraft, dragging, consumeDragClick }
 }

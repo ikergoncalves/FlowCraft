@@ -14,6 +14,9 @@
   --block-fill: #232833;
   --block-stroke: #3b4351;
   --selection-bounds: #6f7d94;
+  --connection: #7d8798;
+  --connection-selected: #4c8dff;
+  --port: #4c8dff;
 
   color-scheme: dark;
   font-family:
@@ -153,6 +156,65 @@ body,
 .canvas__svg--dragging .block,
 .canvas__svg--dragging .selection__handle {
   cursor: inherit;
+}
+
+/* Connections ------------------------------------------------------------ */
+
+.connection__line {
+  stroke: var(--connection);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.connection__arrow {
+  fill: var(--connection);
+}
+
+.connection--selected .connection__line {
+  stroke: var(--connection-selected);
+  stroke-width: 2.5;
+}
+
+/* The arrowhead stays the base colour when selected: one `<marker>` is shared
+ * by every connection, and per-instance marker tinting needs `context-stroke`,
+ * which is not portable yet. The thicker, brighter line carries the state. */
+
+.connection__hit {
+  cursor: pointer;
+}
+
+.canvas__svg--dragging .connection__hit {
+  cursor: inherit;
+}
+
+/* The arrow being dragged out of a port: dashed, so it reads as provisional. */
+.connection__ghost {
+  stroke: var(--connection-selected);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.connect-target {
+  stroke: var(--connection-selected);
+  stroke-width: 2;
+}
+
+/* Ports ------------------------------------------------------------------ */
+
+.port {
+  cursor: crosshair;
+}
+
+.port__dot {
+  fill: var(--surface);
+  stroke: var(--port);
+  stroke-width: 1.5;
+}
+
+.port:hover .port__dot,
+.port--active .port__dot {
+  fill: var(--port);
 }
 
 /* Selection chrome ------------------------------------------------------- */

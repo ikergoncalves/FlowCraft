@@ -47,8 +47,17 @@ export function useEditorShortcuts(): void {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) return
 
-      const { selectedIds, setTool, removeBlocks, clearSelection, resetView, selectAll } =
-        useDiagramStore.getState()
+      const {
+        selectedIds,
+        selectedConnectionIds,
+        setTool,
+        removeBlocks,
+        removeConnections,
+        clearSelection,
+        resetView,
+        selectAll,
+        toggleSnapToGrid,
+      } = useDiagramStore.getState()
 
       // Ctrl/Cmd + A is the one accelerator this editor claims. Everything
       // below is an unmodified key, so modified events bow out right after —
@@ -69,12 +78,24 @@ export function useEditorShortcuts(): void {
         return
       }
 
+      // Snap has no tool of its own, so it gets a plain key like the tools do.
+      if (event.key.toLowerCase() === 'g') {
+        event.preventDefault()
+        toggleSnapToGrid()
+        return
+      }
+
       switch (event.key) {
         case 'Delete':
         case 'Backspace':
-          if (selectedIds.length > 0) {
+          if (selectedIds.length > 0 || selectedConnectionIds.length > 0) {
             event.preventDefault()
-            removeBlocks(selectedIds)
+            // Connections first: removing the blocks cascades anyway, but
+            // doing it in this order keeps the two calls independent of each
+            // other, which is what Phase 4 will want when it pairs them into
+            // one command.
+            if (selectedConnectionIds.length > 0) removeConnections(selectedConnectionIds)
+            if (selectedIds.length > 0) removeBlocks(selectedIds)
           }
           return
         case 'Escape':

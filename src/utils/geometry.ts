@@ -1,4 +1,5 @@
 import type { Point } from '../types'
+import { snapValue } from './snap'
 
 /**
  * An axis-aligned box in world space, `x`/`y` being its top-left corner.
@@ -117,6 +118,47 @@ export interface ResizeOptions {
   minSize?: number
   /** Keep the original aspect ratio. Only meaningful for corner handles. */
   preserveAspect?: boolean
+  /**
+   * Round the edges this handle moves onto a lattice of this size. Omit — or
+   * pass `undefined` — for no snapping.
+   *
+   * Only the moving edges are snapped; the anchored edge stays exactly where
+   * it was, so a resize never shifts the corner the user is holding still.
+   * Ignored alongside `preserveAspect`, since rounding both axes would destroy
+   * the ratio that option exists to protect.
+   */
+  snapStep?: number
+}
+
+/**
+ * Rewrites a resize delta so the edges the handle moves land on the lattice.
+ *
+ * For each axis the handle actually drags, the moving edge's new position is
+ * rounded to a multiple of `step` and the delta adjusted to match. Axes the
+ * handle leaves alone keep a delta of whatever they had, which `resizeRect`
+ * then ignores anyway.
+ */
+function snapDelta(
+  rect: Rect,
+  edge: { x: -1 | 0 | 1; y: -1 | 0 | 1 },
+  deltaWorld: Point,
+  step: number,
+): Point {
+  const snapAxis = (
+    direction: -1 | 0 | 1,
+    min: number,
+    size: number,
+    delta: number,
+  ): number => {
+    if (direction === 0) return delta
+    const movingEdge = direction === 1 ? min + size : min
+    return snapValue(movingEdge + delta, step) - movingEdge
+  }
+
+  return {
+    x: snapAxis(edge.x, rect.x, rect.width, deltaWorld.x),
+    y: snapAxis(edge.y, rect.y, rect.height, deltaWorld.y),
+  }
 }
 
 /**
@@ -137,8 +179,23 @@ export function resizeRect(
   const edge = HANDLE_EDGES[handle]
   const isCorner = edge.x !== 0 && edge.y !== 0
 
-  let width = rect.width + edge.x * deltaWorld.x
-  let height = rect.height + edge.y * deltaWorld.y
+  /*
+   * Snapping is applied to the *edge positions*, not to the delta or the
+   * resulting size, and then fed back in as a corrected delta.
+   *
+   * Rounding the width instead would leave a block whose left edge started off
+   * the lattice still off it, only now a round number wide — the opposite of
+   * what the user sees. Correcting the delta means the rest of the function,
+   * including the minimum-size clamp below, carries on unchanged; the clamp
+   * therefore still wins over the grid, and a block dragged to its floor stays
+   * at exactly MIN_BLOCK_SIZE rather than a grid multiple.
+   */
+  const snapStep = options.preserveAspect ? undefined : options.snapStep
+  const delta =
+    snapStep === undefined ? deltaWorld : snapDelta(rect, edge, deltaWorld, snapStep)
+
+  let width = rect.width + edge.x * delta.x
+  let height = rect.height + edge.y * delta.y
 
   if (options.preserveAspect && isCorner && rect.width > 0 && rect.height > 0) {
     // Follow whichever axis the pointer pushed proportionally further and

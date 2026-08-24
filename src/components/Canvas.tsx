@@ -1,12 +1,24 @@
-import { useCallback, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { useBlockList, useDiagramStore } from '../store/diagramStore'
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
+import { useBlockList, useConnectionList, useDiagramStore } from '../store/diagramStore'
 import { useCanvasGestures } from '../hooks/useCanvasGestures'
 import { useCanvasRect } from '../hooks/useCanvasRect'
 import { useSpaceKey } from '../hooks/useSpaceKey'
 import type { CanvasRect } from '../types'
-import { gridStepForZoom, screenToWorld, viewBoxFor } from '../utils/coords'
+import { GRID_SIZE, gridStepForZoom, screenToWorld, viewBoxFor } from '../utils/coords'
 import { makeBlockAt } from '../utils/blocks'
+import { snapPoint } from '../utils/snap'
+import { BlockPorts } from './BlockPorts'
 import { BlockView } from './BlockView'
+import { ConnectionDefs } from './ConnectionDefs'
+import { ConnectionView } from './ConnectionView'
+import { GhostConnection } from './GhostConnection'
 import { SelectionOverlay } from './SelectionOverlay'
 import { TextEditor } from './TextEditor'
 import { ZoomIndicator } from './ZoomIndicator'
@@ -32,23 +44,56 @@ export function Canvas() {
   const viewport = useDiagramStore((state) => state.viewport)
   const tool = useDiagramStore((state) => state.tool)
   const selectedIds = useDiagramStore((state) => state.selectedIds)
+  const selectedConnectionIds = useDiagramStore((state) => state.selectedConnectionIds)
   const blocks = useBlockList()
+  const connections = useConnectionList()
 
   const [editingId, setEditingId] = useState<string | null>(null)
+  // Which block the pointer is over, so its ports can appear. Ephemeral UI
+  // state, so it stays local rather than going through the store.
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
   const { pressed: spacePressed, pressedRef: spacePressedRef } = useSpaceKey()
 
   const measure = useCallback(() => readRect(containerRef.current, rect), [rect])
-  const { onPointerDown, marquee, dragging, consumeDragClick } = useCanvasGestures(
-    svgRef,
-    measure,
-    spacePressedRef,
-  )
+  const { onPointerDown, marquee, connectDraft, dragging, consumeDragClick } =
+    useCanvasGestures(svgRef, measure, spacePressedRef)
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const selectedBlocks = useMemo(
     () => blocks.filter((block) => selectedSet.has(block.id)),
     [blocks, selectedSet],
   )
+  const selectedConnectionSet = useMemo(
+    () => new Set(selectedConnectionIds),
+    [selectedConnectionIds],
+  )
+  const blockById = useMemo(
+    () => new Map(blocks.map((block) => [block.id, block])),
+    [blocks],
+  )
+
+  /**
+   * Tracks the hovered block from `pointerover`, which bubbles and fires only
+   * when the pointer crosses into a different element — far cheaper than
+   * hit-testing on every `pointermove`.
+   */
+  const handlePointerOver = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const target = event.target
+    const id =
+      target instanceof Element
+        ? (target.closest('[data-block-id]')?.getAttribute('data-block-id') ??
+          target.closest('[data-port-block]')?.getAttribute('data-port-block') ??
+          null)
+        : null
+    setHoveredId(id)
+  }
+
+  // Ports belong to direct manipulation, so they stay out of the way while a
+  // creation tool is active or another gesture is already running.
+  const portsBlock =
+    tool === 'select' && !dragging && hoveredId !== null
+      ? (blockById.get(hoveredId) ?? null)
+      : null
 
   const handleClick = (event: MouseEvent<SVGSVGElement>) => {
     // The click that ends a drag is not a click on the canvas.
@@ -63,12 +108,15 @@ export function Canvas() {
     } = useDiagramStore.getState()
 
     if (activeTool === 'select') {
-      // Anything over a block or its handles was already settled on pointer
-      // down; only bare canvas clears, and a modified click never does.
+      // Anything over a block, a connection or the handles was already settled
+      // on pointer down; only bare canvas clears, and a modified click never
+      // does.
       const target = event.target
       const onChrome =
         target instanceof Element &&
-        target.closest('[data-block-id], [data-resize-handle]') !== null
+        target.closest(
+          '[data-block-id], [data-resize-handle], [data-connection-id], [data-port-side]',
+        ) !== null
       if (onChrome || isAdditiveClick(event)) return
       clearSelection()
       return
@@ -79,7 +127,17 @@ export function Canvas() {
       useDiagramStore.getState().viewport,
       measure(),
     )
-    const block = addBlock(makeBlockAt(activeTool, world))
+    const draft = makeBlockAt(activeTool, world)
+    // Snap the new block's own corner, so a freshly created block sits on the
+    // grid rather than wherever the click happened to land. Alt inverts, the
+    // same way it does mid-drag.
+    const { snapToGrid } = useDiagramStore.getState()
+    const position =
+      snapToGrid !== event.altKey
+        ? snapPoint({ x: draft.x, y: draft.y }, GRID_SIZE)
+        : { x: draft.x, y: draft.y }
+
+    const block = addBlock({ ...draft, ...position })
     select(block.id)
     // Creation is one-shot: drop straight back into Select.
     setTool('select')
@@ -117,6 +175,10 @@ export function Canvas() {
         viewBox={viewBoxFor(viewport, rect)}
         style={{ cursor, touchAction: 'none' }}
         onPointerDown={onPointerDown}
+        onPointerOver={handlePointerOver}
+        onPointerLeave={() => {
+          setHoveredId(null)
+        }}
         onClick={handleClick}
         onContextMenu={(event) => {
           event.preventDefault()
@@ -138,6 +200,8 @@ export function Canvas() {
             <circle className="grid__dot" cx={0} cy={gridStep} r={dotRadius} />
             <circle className="grid__dot" cx={gridStep} cy={gridStep} r={dotRadius} />
           </pattern>
+
+          <ConnectionDefs zoom={viewport.zoom} />
         </defs>
 
         <rect
@@ -150,6 +214,25 @@ export function Canvas() {
           fill={`url(#${GRID_PATTERN_ID})`}
         />
 
+        {/* Under the blocks, so an arrow never covers the box it points at. */}
+        {connections.map((connection) => {
+          const source = blockById.get(connection.sourceId)
+          const target = blockById.get(connection.targetId)
+          // A dangling connection cannot happen — removing a block cascades —
+          // but rendering nothing is cheaper than trusting that at paint time.
+          if (!source || !target) return null
+          return (
+            <ConnectionView
+              key={connection.id}
+              connection={connection}
+              source={source}
+              target={target}
+              selected={selectedConnectionSet.has(connection.id)}
+              zoom={viewport.zoom}
+            />
+          )
+        })}
+
         {blocks.map((block) => (
           <BlockView
             key={block.id}
@@ -158,6 +241,29 @@ export function Canvas() {
             onEdit={setEditingId}
           />
         ))}
+
+        {/* Highlights the block a released connection would land on. Drawn as
+            an overlay rather than as a BlockView prop so the block component
+            stays free of gesture state. */}
+        {connectDraft?.target && (
+          <rect
+            className="connect-target"
+            data-testid="connect-target"
+            data-connect-target-id={connectDraft.target.id}
+            x={connectDraft.target.x}
+            y={connectDraft.target.y}
+            width={connectDraft.target.width}
+            height={connectDraft.target.height}
+            rx={4}
+            fill="none"
+            vectorEffect="non-scaling-stroke"
+            pointerEvents="none"
+          />
+        )}
+
+        {connectDraft && <GhostConnection draft={connectDraft} />}
+
+        {portsBlock && <BlockPorts block={portsBlock} zoom={viewport.zoom} />}
 
         {marquee && (
           <rect

@@ -16,6 +16,8 @@ const TOOLS: ToolSpec[] = [
 export function Toolbar() {
   const tool = useDiagramStore((state) => state.tool)
   const setTool = useDiagramStore((state) => state.setTool)
+  const snapToGrid = useDiagramStore((state) => state.snapToGrid)
+  const toggleSnapToGrid = useDiagramStore((state) => state.toggleSnapToGrid)
 
   return (
     <div className="toolbar" role="toolbar" aria-label="Tools">
@@ -36,6 +38,19 @@ export function Toolbar() {
             <kbd className="toolbar__kbd">{spec.shortcut}</kbd>
           </button>
         ))}
+      </div>
+
+      <div className="toolbar__group">
+        <button
+          type="button"
+          className="toolbar__button"
+          aria-pressed={snapToGrid}
+          title="Snap to grid (G) — hold Alt during a gesture to invert"
+          onClick={toggleSnapToGrid}
+        >
+          Snap
+          <kbd className="toolbar__kbd">G</kbd>
+        </button>
       </div>
     </div>
   )

@@ -80,6 +80,26 @@ export function chooseAnchors(source: Rect, target: Rect): AnchorPair {
   return dy >= 0 ? { source: 's', target: 'n' } : { source: 'n', target: 's' }
 }
 
+/**
+ * Fills in whichever anchors were left unspecified.
+ *
+ * An explicitly pinned side always wins; the rest come from `chooseAnchors`
+ * against the blocks' current rects, which is what lets an un-pinned arrow
+ * re-route itself when a block is dragged around to the other side of its
+ * partner.
+ */
+export function resolveAnchors(
+  pinned: { sourceAnchor?: AnchorSide; targetAnchor?: AnchorSide },
+  source: Rect,
+  target: Rect,
+): AnchorPair {
+  const automatic = chooseAnchors(source, target)
+  return {
+    source: pinned.sourceAnchor ?? automatic.source,
+    target: pinned.targetAnchor ?? automatic.target,
+  }
+}
+
 /** Two points that are the same to within floating-point noise. */
 function samePoint(a: Point, b: Point): boolean {
   return Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9

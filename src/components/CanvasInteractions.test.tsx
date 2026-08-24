@@ -43,9 +43,17 @@ beforeEach(() => {
   useDiagramStore.setState({
     blocks: {},
     blockOrder: [],
+    connections: {},
+    connectionOrder: [],
     viewport: DEFAULT_VIEWPORT,
     selectedIds: [],
+    selectedConnectionIds: [],
     tool: 'select',
+    // These tests are about how a gesture tracks the pointer, so snapping is
+    // off: with it on, every expected coordinate would be rounded to the grid
+    // and the assertions would stop measuring tracking at all. Snapping has
+    // its own suite in Connections.test.tsx.
+    snapToGrid: false,
   })
 })
 

@@ -48,6 +48,15 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
   },
 
+  // The browser-verification harness is plain Node ESM: it drives Chrome over
+  // CDP from outside the app, so it is neither browser code nor covered by the
+  // app tsconfig.
+  {
+    files: ['scripts/**/*.mjs'],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: { globals: { ...globals.node, WebSocket: 'readonly' } },
+  },
+
   // Config files are Node-side and are not covered by the app tsconfig's type
   // information, so type-aware linting is disabled for them.
   {

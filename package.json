@@ -16,7 +16,8 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "verify:browser": "node scripts/verify-browser.mjs"
   },
   "dependencies": {
     "@use-gesture/react": "^10.3.1",

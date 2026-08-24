@@ -51,3 +51,38 @@ export interface Block extends Point, Size {
 }
 
 export type Tool = 'select' | 'rect' | 'text'
+
+/** Which edge of a block a connection leaves from or arrives at. */
+export type AnchorSide = 'n' | 'e' | 's' | 'w'
+
+/** Every side, in clockwise order starting at the top. */
+export const ANCHOR_SIDES: readonly AnchorSide[] = ['n', 'e', 's', 'w']
+
+/**
+ * Per-connection visual overrides. Empty of meaning until Phase 5, exactly
+ * like `BlockStyle`.
+ */
+export interface ConnectionStyle {
+  stroke?: string
+  strokeWidth?: number
+  dashed?: boolean
+}
+
+/**
+ * An arrow from one block to another.
+ *
+ * It stores *ids only* — never endpoint coordinates. Every point of the drawn
+ * polyline is derived from the two blocks' current rects at render time, which
+ * is the whole reason arrows follow their blocks around with no synchronising
+ * code anywhere. Anchors are optional: absent means "pick the sides from the
+ * blocks' relative positions", so a connection re-routes itself sensibly when
+ * a block is dragged to the other side of its partner.
+ */
+export interface Connection {
+  id: string
+  sourceId: string
+  targetId: string
+  sourceAnchor?: AnchorSide
+  targetAnchor?: AnchorSide
+  style?: ConnectionStyle
+}

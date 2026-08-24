@@ -9,9 +9,13 @@ const reset = () =>
   useDiagramStore.setState({
     blocks: {},
     blockOrder: [],
+    connections: {},
+    connectionOrder: [],
     viewport: DEFAULT_VIEWPORT,
     selectedIds: [],
+    selectedConnectionIds: [],
     tool: 'select',
+    snapToGrid: true,
   })
 
 beforeEach(reset)

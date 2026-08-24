@@ -578,6 +578,11 @@ describe('selecting and removing connections', () => {
 
     expect(screen.queryAllByTestId('connection')).toHaveLength(0)
     expect(screen.getAllByTestId('block')).toHaveLength(1)
+    // The store must really be rid of it, not merely unable to draw it: the
+    // canvas skips any connection whose endpoints are missing, so the DOM
+    // assertion above would pass even with the cascade removed.
+    expect(store().connectionOrder).toEqual([])
+    expect(store().connections).toEqual({})
   })
 
   it('deletes a mixed selection of blocks and connections in one go', async () => {

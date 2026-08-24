@@ -144,12 +144,13 @@ const dragFrom = (
 /**
  * How far the diagram actually moves for a given pointer travel.
  *
- * The gesture layer swallows the first `DRAG_TAP_THRESHOLD` pixels on each
- * axis so a click is never mistaken for a drag, and reports the remainder.
+ * `DRAG_TAP_THRESHOLD` is a deadzone: travel under it is a click and moves
+ * nothing, and anything past it moves the *full* distance rather than the
+ * distance less the threshold. See the drag-tracking tests below.
  */
 const applied = (screenDelta: number, zoom = 1) => {
   if (Math.abs(screenDelta) < DRAG_TAP_THRESHOLD) return 0
-  return (screenDelta - Math.sign(screenDelta) * DRAG_TAP_THRESHOLD) / zoom
+  return screenDelta / zoom
 }
 
 describe('moving blocks', () => {
@@ -161,6 +162,48 @@ describe('moving blocks', () => {
 
     expect(blockAt(block.id)?.x).toBeCloseTo(100 + applied(80), 6)
     expect(blockAt(block.id)?.y).toBeCloseTo(100 + applied(-40), 6)
+  })
+
+  it('keeps the block exactly under the cursor, with no threshold lag', () => {
+    render(<App />)
+    const block = required(seed({ x: 100, y: 100 })[0], 'block')
+
+    // Grabbed dead centre, so the block's centre must stay on the pointer for
+    // the whole drag rather than trailing it by DRAG_TAP_THRESHOLD.
+    dragFrom(blockElement(block.id), { x: 150, y: 130 }, { x: 200, y: 140 })
+
+    const moved = required(blockAt(block.id), 'moved')
+    expect(moved.x + moved.width / 2).toBeCloseTo(350, 6)
+    expect(moved.y + moved.height / 2).toBeCloseTo(270, 6)
+  })
+
+  it('does not overshoot when the drag reverses past its starting point', () => {
+    render(<App />)
+    const block = required(seed({ x: 100, y: 100 })[0], 'block')
+
+    // Out to the right first — latching the threshold — then well back to the
+    // left. A latched threshold would leave the block 3px off in world units.
+    fireEvent.pointerDown(blockElement(block.id), {
+      clientX: 150,
+      clientY: 130,
+      button: 0,
+      buttons: 1,
+    })
+    fireEvent.pointerMove(getCanvas(), { clientX: 250, clientY: 130, buttons: 1 })
+    fireEvent.pointerMove(getCanvas(), { clientX: 70, clientY: 130, buttons: 1 })
+    fireEvent.pointerUp(getCanvas(), { clientX: 70, clientY: 130, buttons: 0 })
+
+    // Pointer travelled -80px, so the block must sit at exactly 100 - 80.
+    expect(blockAt(block.id)?.x).toBeCloseTo(20, 6)
+  })
+
+  it('treats travel under the threshold as a click that moves nothing', () => {
+    render(<App />)
+    const block = required(seed({ x: 100, y: 100 })[0], 'block')
+
+    dragFrom(blockElement(block.id), { x: 150, y: 130 }, { x: 2, y: 2 })
+
+    expect(blockAt(block.id)).toMatchObject({ x: 100, y: 100 })
   })
 
   it('leaves the block size untouched while moving', () => {
@@ -216,7 +259,7 @@ describe('moving blocks', () => {
 
     dragFrom(blockElement(block.id), { x: 20, y: 20 }, { x: 100, y: 50 })
 
-    // 100 screen px at 2x is 50 world units, less the swallowed threshold.
+    // 100 screen px at 2x is 50 world units, one-for-one with the pointer.
     expect(blockAt(block.id)?.x).toBeCloseTo(applied(100, 2), 6)
     expect(blockAt(block.id)?.y).toBeCloseTo(applied(50, 2), 6)
   })

@@ -33,9 +33,12 @@ const BUTTON_MIDDLE = 1
 
 /**
  * Pixels the pointer must travel before a press counts as a drag rather than
- * a click. Those first pixels are also subtracted from the reported movement,
- * so nothing jumps when the threshold is crossed. Exported because it is a
- * visible part of the gesture contract, and tests assert against it.
+ * a click.
+ *
+ * It is a deadzone and nothing more: once crossed, gestures work from the
+ * pointer's full travel, so the threshold is never subtracted from what the
+ * user sees moving. Exported because it is a visible part of the gesture
+ * contract, and tests assert against it.
  */
 export const DRAG_TAP_THRESHOLD = 3
 
@@ -265,9 +268,9 @@ export function useCanvasGestures(
       },
 
       onDrag: ({
-        movement: [mx, my],
         delta: [dx, dy],
         xy: [px, py],
+        initial: [ix, iy],
         active,
         first,
         shiftKey,
@@ -284,18 +287,34 @@ export function useCanvasGestures(
 
         const { viewport } = useDiagramStore.getState()
 
+        // The pointer's true travel since the press, *not* `movement`.
+        //
+        // @use-gesture latches the tap threshold the moment a drag turns
+        // intentional and subtracts it from `movement` for the rest of the
+        // gesture, so a block would trail the cursor by DRAG_TAP_THRESHOLD
+        // pixels forever — measured at a constant 3px in Chrome, and it never
+        // catches up, not even after the drag reverses. `xy - initial` is the
+        // uncompensated travel, so the grabbed thing stays glued to the
+        // cursor. Taps are still filtered: this handler only runs once the
+        // gesture has already crossed the threshold.
+        const travel = { x: px - ix, y: py - iy }
+
         switch (session.mode) {
           case 'pan': {
             // The only mode driven by the per-frame delta rather than a
             // snapshot: a pan has no start state worth preserving, and
             // integrating deltas keeps it correct if the zoom changes mid-pan.
-            if (dx === 0 && dy === 0) return
-            useDiagramStore.getState().setViewport(panByScreenDelta(viewport, dx, dy))
+            // The very first frame uses the raw travel instead, because that
+            // is the one frame whose delta is short by the tap threshold.
+            const panX = first ? travel.x : dx
+            const panY = first ? travel.y : dy
+            if (panX === 0 && panY === 0) return
+            useDiagramStore.getState().setViewport(panByScreenDelta(viewport, panX, panY))
             return
           }
 
           case 'move': {
-            const delta = screenDeltaToWorld({ x: mx, y: my }, viewport.zoom)
+            const delta = screenDeltaToWorld(travel, viewport.zoom)
             const positions: Record<string, Point> = {}
             for (const [id, start] of Object.entries(session.origin)) {
               positions[id] = { x: start.x + delta.x, y: start.y + delta.y }
@@ -305,7 +324,7 @@ export function useCanvasGestures(
           }
 
           case 'resize': {
-            const delta = screenDeltaToWorld({ x: mx, y: my }, viewport.zoom)
+            const delta = screenDeltaToWorld(travel, viewport.zoom)
             useDiagramStore.getState().updateBlock(
               session.id,
               resizeRect(session.rect, session.handle, delta, {

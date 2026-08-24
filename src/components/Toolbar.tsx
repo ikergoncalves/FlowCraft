@@ -1,3 +1,4 @@
+import { redoLabel, undoLabel, useHistoryStore } from '../history/historyStore'
 import { useDiagramStore } from '../store/diagramStore'
 import type { Tool } from '../types'
 
@@ -13,11 +14,26 @@ const TOOLS: ToolSpec[] = [
   { tool: 'text', label: 'Text', shortcut: 'T' },
 ]
 
+/**
+ * `"Undo: Move 3 blocks"`, or plain `"Undo"` when there is nothing to undo.
+ *
+ * The label is the command's own, so the button and the history can never
+ * disagree about what the next press will do.
+ */
+function actionTitle(verb: string, label: string | null): string {
+  return label === null ? verb : `${verb}: ${label}`
+}
+
 export function Toolbar() {
   const tool = useDiagramStore((state) => state.tool)
   const setTool = useDiagramStore((state) => state.setTool)
   const snapToGrid = useDiagramStore((state) => state.snapToGrid)
   const toggleSnapToGrid = useDiagramStore((state) => state.toggleSnapToGrid)
+
+  const undo = useHistoryStore((state) => state.undo)
+  const redo = useHistoryStore((state) => state.redo)
+  const nextUndo = useHistoryStore(undoLabel)
+  const nextRedo = useHistoryStore(redoLabel)
 
   return (
     <div className="toolbar" role="toolbar" aria-label="Tools">
@@ -38,6 +54,35 @@ export function Toolbar() {
             <kbd className="toolbar__kbd">{spec.shortcut}</kbd>
           </button>
         ))}
+      </div>
+
+      <div className="toolbar__group">
+        {/* Genuinely `disabled`, not just dimmed: a button that looks dead and
+            still fires is worse than either. */}
+        <button
+          type="button"
+          className="toolbar__button"
+          data-testid="undo"
+          disabled={nextUndo === null}
+          title={actionTitle('Undo', nextUndo)}
+          aria-label={actionTitle('Undo', nextUndo)}
+          onClick={undo}
+        >
+          Undo
+          <kbd className="toolbar__kbd">Ctrl Z</kbd>
+        </button>
+        <button
+          type="button"
+          className="toolbar__button"
+          data-testid="redo"
+          disabled={nextRedo === null}
+          title={actionTitle('Redo', nextRedo)}
+          aria-label={actionTitle('Redo', nextRedo)}
+          onClick={redo}
+        >
+          Redo
+          <kbd className="toolbar__kbd">Ctrl ⇧ Z</kbd>
+        </button>
       </div>
 
       <div className="toolbar__group">

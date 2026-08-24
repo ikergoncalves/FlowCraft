@@ -89,6 +89,13 @@ body,
   background: rgb(255 255 255 / 6%);
 }
 
+.toolbar__button:disabled {
+  color: var(--text-muted);
+  background: transparent;
+  cursor: default;
+  opacity: 0.4;
+}
+
 .toolbar__button[aria-pressed='true'] {
   color: var(--text);
   background: rgb(76 141 255 / 18%);

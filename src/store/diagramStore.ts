@@ -16,6 +16,45 @@ export type BlockPatch = Partial<Omit<Block, 'id'>>
 export type ConnectionInit = Omit<Connection, 'id'> & { id?: string }
 
 /**
+ * A block together with the slot it occupied in `blockOrder`.
+ *
+ * Phase 4 needed this and `addBlock`'s explicit id was not enough on its own:
+ * re-creating a deleted block put it back in the map correctly but appended it
+ * to the end of the paint order, so undoing the delete of a block that sat
+ * underneath another silently brought it back on top. Undo has to be exact, so
+ * the slot travels with the block.
+ */
+export interface BlockPlacement {
+  block: Block
+  index: number
+}
+
+/** The connection counterpart of `BlockPlacement`. */
+export interface ConnectionPlacement {
+  connection: Connection
+  index: number
+}
+
+/**
+ * Splices ids back into an order list at the slots they came from.
+ *
+ * Placements are applied in ascending index order, which is what makes the
+ * indices mean "position in the finished list" rather than "position at the
+ * moment this one is inserted".
+ */
+function spliceInOrder(
+  order: readonly string[],
+  placements: readonly { id: string; index: number }[],
+): string[] {
+  const next = [...order]
+  for (const placement of [...placements].sort((a, b) => a.index - b.index)) {
+    const at = Math.min(Math.max(placement.index, 0), next.length)
+    next.splice(at, 0, placement.id)
+  }
+  return next
+}
+
+/**
  * Whether two connections are the same link drawn twice.
  *
  * Anchors are part of the identity: deliberately routing a second arrow out of
@@ -65,6 +104,8 @@ export interface DiagramState {
   snapToGrid: boolean
 
   addBlock: (init: BlockInit) => Block
+  insertBlocks: (placements: readonly BlockPlacement[]) => void
+  insertConnections: (placements: readonly ConnectionPlacement[]) => void
   updateBlock: (id: string, patch: BlockPatch) => void
   updateBlocks: (patches: Record<string, BlockPatch>) => void
   setBlockPositions: (positions: Record<string, Point>) => void
@@ -79,6 +120,7 @@ export interface DiagramState {
   toggleSelection: (id: string) => void
   selectConnections: (ids: string | readonly string[]) => void
   toggleConnectionSelection: (id: string) => void
+  setSelection: (blockIds: readonly string[], connectionIds: readonly string[]) => void
   selectAll: () => void
   clearSelection: () => void
   setTool: (tool: Tool) => void
@@ -116,6 +158,57 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
     }))
     return block
   },
+
+  /**
+   * Puts blocks back exactly where they were, paint order included.
+   *
+   * A restore primitive, not a creation one: it is what undoing a delete calls,
+   * so unlike `addBlock` it takes whole `Block` objects and their old slots.
+   * Ids already present are skipped, which makes a replayed `apply` a no-op
+   * rather than a duplicate — history commands are required to be idempotent.
+   */
+  insertBlocks: (placements) =>
+    set((state) => {
+      const pending = placements.filter(({ block }) => !(block.id in state.blocks))
+      if (pending.length === 0) return state
+
+      const blocks = { ...state.blocks }
+      for (const { block } of pending) blocks[block.id] = block
+
+      return {
+        blocks,
+        blockOrder: spliceInOrder(
+          state.blockOrder,
+          pending.map(({ block, index }) => ({ id: block.id, index })),
+        ),
+      }
+    }),
+
+  /**
+   * The connection counterpart of `insertBlocks`.
+   *
+   * Deliberately skips the validation `addConnection` does: this restores a
+   * link that the diagram already accepted once, and re-running the duplicate
+   * check against the connection's own former self would refuse it.
+   */
+  insertConnections: (placements) =>
+    set((state) => {
+      const pending = placements.filter(
+        ({ connection }) => !(connection.id in state.connections),
+      )
+      if (pending.length === 0) return state
+
+      const connections = { ...state.connections }
+      for (const { connection } of pending) connections[connection.id] = connection
+
+      return {
+        connections,
+        connectionOrder: spliceInOrder(
+          state.connectionOrder,
+          pending.map(({ connection, index }) => ({ id: connection.id, index })),
+        ),
+      }
+    }),
 
   updateBlock: (id, patch) =>
     set((state) => {
@@ -307,6 +400,18 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
         ? state.selectedConnectionIds.filter((selected) => selected !== id)
         : [...state.selectedConnectionIds, id],
     })),
+
+  /**
+   * Sets both selection lists at once.
+   *
+   * Every other selection action is exclusive — `select` clears the arrows,
+   * `selectConnections` clears the blocks — which is right for pointer input
+   * but cannot express "these blocks *and* these arrows". Undo needs exactly
+   * that: restoring the selection a command was created with has to reinstate
+   * a mixed selection verbatim, so this is the one action that writes both.
+   */
+  setSelection: (blockIds, connectionIds) =>
+    set({ selectedIds: [...blockIds], selectedConnectionIds: [...connectionIds] }),
 
   /**
    * Selects every block — but no connections.

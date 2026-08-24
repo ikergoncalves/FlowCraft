@@ -137,9 +137,13 @@ describe('capturePlacements', () => {
     seedBlock('c', 600)
 
     const placements = capturePlacements(store(), ['a', 'c'], [])
-    expect(placements.blocks).toEqual([
-      { block: expect.objectContaining({ id: 'a' }), index: 0 },
-      { block: expect.objectContaining({ id: 'c' }), index: 2 },
+    expect(
+      placements.blocks.map(({ block, index }) => [block.id, index]),
+      // 'c' keeps index 2 even though 'b' is not in the capture: the index is
+      // the slot in `blockOrder`, which is what undo has to splice back into.
+    ).toEqual([
+      ['a', 0],
+      ['c', 2],
     ])
   })
 

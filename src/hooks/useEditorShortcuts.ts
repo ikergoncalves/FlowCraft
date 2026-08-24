@@ -1,12 +1,29 @@
 import { useEffect } from 'react'
+import {
+  copySelection,
+  deleteSelection,
+  duplicateSelection,
+  nudgeSelection,
+  pasteClipboard,
+} from '../history/actions'
+import { useHistoryStore } from '../history/historyStore'
 import { useDiagramStore } from '../store/diagramStore'
-import type { Tool } from '../types'
+import type { Point, Tool } from '../types'
+import { GRID_SIZE } from '../utils/coords'
 
 /** Tool shortcuts, keyed by `KeyboardEvent.key` in lower case. */
 const TOOL_KEYS: Record<string, Tool> = {
   v: 'select',
   r: 'rect',
   t: 'text',
+}
+
+/** Which way each arrow key points, as a unit vector in world space. */
+const ARROW_KEYS: Record<string, Point> = {
+  ArrowLeft: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+  ArrowUp: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 },
 }
 
 /** Elements that swallow keystrokes on their own. */
@@ -31,9 +48,67 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Global editor shortcuts: V/R/T pick a tool, Delete/Backspace removes the
- * selection, Ctrl/Cmd + A selects everything, Escape clears the selection, and
- * 0 resets the view.
+ * Handles the accelerators — the ones with Ctrl/Cmd held.
+ *
+ * Returns whether the event was claimed. Anything not on this list is left
+ * alone with its default intact, which is the whole reason this is a lookup
+ * rather than a blanket `preventDefault` on modified keys: Ctrl+R, Ctrl+T and
+ * Ctrl+W still belong to the browser.
+ */
+function handleAccelerator(event: KeyboardEvent): boolean {
+  const history = useHistoryStore.getState()
+  const key = event.key.toLowerCase()
+
+  switch (key) {
+    case 'a':
+      useDiagramStore.getState().selectAll()
+      return true
+    case 'z':
+      // Shift+Ctrl+Z is the platform-neutral redo; plain Ctrl+Z undoes.
+      if (event.shiftKey) history.redo()
+      else history.undo()
+      return true
+    case 'y':
+      // Ctrl+Y is redo out of Windows habit. Harmless elsewhere, and cheaper
+      // than teaching half the users a second chord.
+      if (event.shiftKey) return false
+      history.redo()
+      return true
+    case 'd':
+      if (event.shiftKey) return false
+      duplicateSelection()
+      return true
+    case 'c':
+      if (event.shiftKey) return false
+      // Returns false when the selection is empty; either way the copy is
+      // ours to claim, so the browser does not also try to copy the page.
+      copySelection()
+      return true
+    case 'v':
+      if (event.shiftKey) return false
+      pasteClipboard()
+      return true
+    default:
+      return false
+  }
+}
+
+/**
+ * Global editor shortcuts.
+ *
+ * | Key                      | Action                                    |
+ * | ------------------------ | ----------------------------------------- |
+ * | `V` / `R` / `T`          | pick a tool                               |
+ * | `G`                      | toggle snapping                           |
+ * | `Delete` / `Backspace`   | delete the selection                      |
+ * | `Escape`                 | clear the selection                       |
+ * | `0`                      | reset the view                            |
+ * | Arrows                   | nudge the selection one unit              |
+ * | `Shift` + arrows         | nudge it a grid step                      |
+ * | `Ctrl/Cmd` + `A`         | select every block                        |
+ * | `Ctrl/Cmd` + `Z`         | undo — `Shift` or `Ctrl/Cmd + Y` to redo  |
+ * | `Ctrl/Cmd` + `D`         | duplicate the selection                   |
+ * | `Ctrl/Cmd` + `C` / `V`   | copy / paste                              |
  *
  * Escape is also how a drag in progress is cancelled; the canvas claims it
  * first, from a capture-phase listener, so a cancelled drag does not also lose
@@ -45,31 +120,33 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 export function useEditorShortcuts(): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Nothing below may fire while the text editor has focus — least of all
+      // Ctrl+Z, which the input's own undo owns while it is open.
       if (isEditableTarget(event.target)) return
 
-      const {
-        selectedIds,
-        selectedConnectionIds,
-        setTool,
-        removeBlocks,
-        removeConnections,
-        clearSelection,
-        resetView,
-        selectAll,
-        toggleSnapToGrid,
-      } = useDiagramStore.getState()
+      const { setTool, clearSelection, resetView, toggleSnapToGrid } =
+        useDiagramStore.getState()
 
-      // Ctrl/Cmd + A is the one accelerator this editor claims. Everything
-      // below is an unmodified key, so modified events bow out right after —
-      // no other browser shortcut gets swallowed.
+      // Alt is never part of an editor accelerator; it is the mid-gesture snap
+      // inverter, and claiming Alt chords here would shadow the OS menu keys.
       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
-        if (event.key.toLowerCase() === 'a') {
-          event.preventDefault()
-          selectAll()
-        }
+        if (handleAccelerator(event)) event.preventDefault()
+        // Claimed or not, a modified key is finished here: everything past
+        // this point is an unmodified key.
         return
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return
+
+      const arrow = ARROW_KEYS[event.key]
+      if (arrow) {
+        event.preventDefault()
+        // A literal step either way — see `nudgeSelection` on why this
+        // ignores the Snap toggle. Shift multiplies rather than snapping, so
+        // holding it is predictable wherever the block happens to sit.
+        const step = event.shiftKey ? GRID_SIZE : 1
+        nudgeSelection(arrow.x * step, arrow.y * step)
+        return
+      }
 
       const nextTool = TOOL_KEYS[event.key.toLowerCase()]
       if (nextTool) {
@@ -87,17 +164,16 @@ export function useEditorShortcuts(): void {
 
       switch (event.key) {
         case 'Delete':
-        case 'Backspace':
+        case 'Backspace': {
+          const { selectedIds, selectedConnectionIds } = useDiagramStore.getState()
           if (selectedIds.length > 0 || selectedConnectionIds.length > 0) {
             event.preventDefault()
-            // Connections first: removing the blocks cascades anyway, but
-            // doing it in this order keeps the two calls independent of each
-            // other, which is what Phase 4 will want when it pairs them into
-            // one command.
-            if (selectedConnectionIds.length > 0) removeConnections(selectedConnectionIds)
-            if (selectedIds.length > 0) removeBlocks(selectedIds)
+            // Blocks, arrows and the cascade come out together as one history
+            // entry — undoing a delete must put back everything it took.
+            deleteSelection()
           }
           return
+        }
         case 'Escape':
           clearSelection()
           return

@@ -13,6 +13,7 @@ import { useSpaceKey } from '../hooks/useSpaceKey'
 import type { CanvasRect } from '../types'
 import { GRID_SIZE, gridStepForZoom, screenToWorld, viewBoxFor } from '../utils/coords'
 import { makeBlockAt } from '../utils/blocks'
+import { commitBlockText, createBlock } from '../history/actions'
 import { snapPoint } from '../utils/snap'
 import { BlockPorts } from './BlockPorts'
 import { BlockView } from './BlockView'
@@ -99,13 +100,7 @@ export function Canvas() {
     // The click that ends a drag is not a click on the canvas.
     if (consumeDragClick()) return
 
-    const {
-      tool: activeTool,
-      addBlock,
-      setTool,
-      select,
-      clearSelection,
-    } = useDiagramStore.getState()
+    const { tool: activeTool, setTool, clearSelection } = useDiagramStore.getState()
 
     if (activeTool === 'select') {
       // Anything over a block, a connection or the handles was already settled
@@ -137,9 +132,12 @@ export function Canvas() {
         ? snapPoint({ x: draft.x, y: draft.y }, GRID_SIZE)
         : { x: draft.x, y: draft.y }
 
-    const block = addBlock({ ...draft, ...position })
-    select(block.id)
-    // Creation is one-shot: drop straight back into Select.
+    // Through the history layer rather than the store, so creation is one undo
+    // entry that also puts the selection back where it was.
+    createBlock({ ...draft, ...position })
+    // Creation is one-shot: drop straight back into Select. The tool is UI
+    // state, so it stays out of the history — undoing the block must not also
+    // hand the user back a tool they have already moved on from.
     setTool('select')
   }
 
@@ -288,7 +286,9 @@ export function Canvas() {
           viewport={viewport}
           rect={rect}
           onCommit={(text) => {
-            useDiagramStore.getState().updateBlock(editingBlock.id, { text })
+            // One entry per edit, not per keystroke: the draft never touched
+            // the store, so this is the first and only value the history sees.
+            commitBlockText(editingBlock.id, text)
             setEditingId(null)
           }}
           onCancel={() => {

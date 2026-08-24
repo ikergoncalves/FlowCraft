@@ -31,6 +31,7 @@ import {
 } from '../utils/geometry'
 import { snapPoint } from '../utils/snap'
 import type { ConnectDraft } from '../components/GhostConnection'
+import { commitMove, commitResize, createConnection } from '../history/actions'
 
 /** `PointerEvent.button` — which button changed state, not a bitmask. */
 const BUTTON_LEFT = 0
@@ -293,11 +294,26 @@ export function useCanvasGestures(
       // the intent explicit.
       const target = draft?.target
       if (!target || target.id === session.sourceId) return
-      useDiagramStore.getState().addConnection({
-        sourceId: session.sourceId,
-        targetId: target.id,
-        sourceAnchor: session.sourceAnchor,
-      })
+      createConnection(session.sourceId, target.id, session.sourceAnchor)
+      return
+    }
+
+    /*
+     * One gesture, one history entry.
+     *
+     * Both commits compare the snapshot this gesture opened with against where
+     * things actually ended up, and record nothing when the two agree — a
+     * click that moved nothing, or a resize that came back to where it began,
+     * leaves the history alone. A gesture cancelled with Escape never reaches
+     * here at all: `cancelSession` restores the snapshot and clears the ref,
+     * so the release that follows finds `mode: 'none'`.
+     */
+    if (session.mode === 'move') {
+      commitMove(session.origin)
+      return
+    }
+    if (session.mode === 'resize') {
+      commitResize(session.id, session.rect)
       return
     }
 

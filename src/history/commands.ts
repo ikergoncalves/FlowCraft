@@ -4,30 +4,35 @@ import {
   type BlockPlacement,
   type ConnectionPlacement,
   type DiagramState,
+  type GroupPlacement,
 } from '../store/diagramStore'
-import type { Point } from '../types'
+import type { BlockStyle, ConnectionStyle, Point } from '../types'
 import {
   cloneBlock,
   cloneConnection,
+  cloneGroup,
   type Command,
   type SelectionSnapshot,
 } from './command'
+import { mergeHandler, openMergePolicy, type Mergeable, type MergeOptions } from './merge'
+
+// Re-exported so the merge window keeps one public home even though the
+// policy itself now lives in `merge.ts`.
+export { MERGE_WINDOW_MS } from './merge'
 
 /**
- * How long a mergeable command stays open to absorbing its successor.
+ * A set of blocks, connections and groups, each with the slot it occupied.
  *
- * Long enough that a held arrow key — which repeats every ~30ms once the
- * initial delay passes — never falls out of the window, short enough that two
- * deliberate presses a second apart stay two separate entries. The window is
- * measured from the *last* merge rather than the first, so a run of nudges
- * keeps extending it and collapses into one entry however long it goes on.
+ * Groups joined in Phase 5 as a third element kind. Nothing about the shape
+ * had to change to let them in — `spliceInOrder` and `capturePlacements` were
+ * already written against "an id, an index and an order list" rather than
+ * against blocks specifically, so the third kind is one more field and one
+ * more loop.
  */
-export const MERGE_WINDOW_MS = 500
-
-/** A set of blocks and connections, each with the slot it occupied. */
 export interface ElementPlacements {
   blocks: BlockPlacement[]
   connections: ConnectionPlacement[]
+  groups: GroupPlacement[]
 }
 
 /**
@@ -55,6 +60,28 @@ export function cascadeConnectionIds(
 }
 
 /**
+ * Every group id that removing `blockIds` would disturb.
+ *
+ * The connection cascade's exact counterpart, and needed for the same reason:
+ * removing a block prunes it out of its group and dissolves the group if that
+ * leaves fewer than two members, and undo cannot reconstruct either fact
+ * afterwards. A group that merely *shrinks* is included as well as one that
+ * dissolves — restoring a group's membership is as much a part of undoing a
+ * delete as restoring the group itself.
+ */
+export function cascadeGroupIds(
+  state: DiagramState,
+  blockIds: readonly string[],
+): string[] {
+  const doomed = new Set(blockIds)
+  return state.groupOrder.filter((id) => {
+    const group = state.groups[id]
+    if (!group) return false
+    return group.blockIds.some((blockId) => doomed.has(blockId))
+  })
+}
+
+/**
  * Deep copies of the named elements, with their positions in the order lists.
  *
  * Copies, never the store's own objects: the store swaps block objects out
@@ -65,6 +92,7 @@ export function capturePlacements(
   state: DiagramState,
   blockIds: readonly string[],
   connectionIds: readonly string[],
+  groupIds: readonly string[] = [],
 ): ElementPlacements {
   const wantedBlocks = new Set(blockIds)
   const blocks: BlockPlacement[] = []
@@ -82,17 +110,39 @@ export function capturePlacements(
     if (connection) connections.push({ connection: cloneConnection(connection), index })
   })
 
-  return { blocks, connections }
+  const wantedGroups = new Set(groupIds)
+  const groups: GroupPlacement[] = []
+  state.groupOrder.forEach((id, index) => {
+    if (!wantedGroups.has(id)) return
+    const group = state.groups[id]
+    if (group) groups.push({ group: cloneGroup(group), index })
+  })
+
+  return { blocks, connections, groups }
 }
 
 function insertElements(placements: ElementPlacements): void {
   const store = useDiagramStore.getState()
   // Blocks first: an arrow whose endpoints are missing would render as
-  // nothing, and for one frame that is exactly what it would be.
+  // nothing, and for one frame that is exactly what it would be. Groups last,
+  // for the stronger reason that a group whose members are missing violates
+  // the document's structural invariant outright.
   store.insertBlocks(placements.blocks)
   store.insertConnections(placements.connections)
+  store.insertGroups(placements.groups)
 }
 
+/**
+ * The mirror of `insertElements` — and deliberately silent about groups.
+ *
+ * `removeBlocks` already prunes departing members out of their group and
+ * dissolves a group left with fewer than two, so every group in a placement
+ * set is handled by removing the blocks. That is not a happy accident: a set
+ * always holds either *all* of a group's members (an undone paste, whose group
+ * dissolves) or *some* of them (a delete, whose group must shrink and survive).
+ * An explicit `removeGroups` here would get the second case wrong by wiping a
+ * group that only lost one member.
+ */
 function removeElements(placements: ElementPlacements): void {
   const store = useDiagramStore.getState()
   // Connections first, so the cascade in `removeBlocks` has nothing left to
@@ -146,7 +196,7 @@ export function createRemoveCommand(spec: ElementCommandSpec): Command {
   }
 }
 
-export interface MoveCommandSpec {
+export interface MoveCommandSpec extends MergeOptions {
   label: string
   /** Where the blocks were, keyed by id. Absolute world coordinates. */
   before: Record<string, Point>
@@ -154,25 +204,10 @@ export interface MoveCommandSpec {
   after: Record<string, Point>
   selectionBefore: SelectionSnapshot
   selectionAfter: SelectionSnapshot
-  /**
-   * Commands sharing a merge key, arriving inside `MERGE_WINDOW_MS`, collapse
-   * into one entry. `null` — the default — never merges, which is what a drag
-   * wants: two drags are two edits however fast they follow each other.
-   */
-  mergeKey?: string | null
-  mergeWindowMs?: number
-  /** Injectable clock, so the merge window is testable without waiting. */
-  now?: number
 }
 
-interface MoveCommand extends Command {
-  readonly kind: 'move'
-  readonly mergeKey: string | null
+interface MoveCommand extends Mergeable<'move'> {
   readonly after: Record<string, Point>
-}
-
-function isMoveCommand(command: Command): command is MoveCommand {
-  return (command as { kind?: unknown }).kind === 'move'
 }
 
 const clonePositions = (positions: Record<string, Point>): Record<string, Point> =>
@@ -190,14 +225,12 @@ const clonePositions = (positions: Record<string, Point>): Record<string, Point>
 export function createMoveCommand(spec: MoveCommandSpec): Command {
   const before = clonePositions(spec.before)
   const after = clonePositions(spec.after)
-  const mergeKey = spec.mergeKey ?? null
-  const window = spec.mergeWindowMs ?? MERGE_WINDOW_MS
-  const openUntil = (spec.now ?? Date.now()) + window
+  const policy = openMergePolicy('move', spec)
 
   const command: MoveCommand = {
-    kind: 'move',
+    kind: policy.kind,
     label: spec.label,
-    mergeKey,
+    mergeKey: policy.mergeKey,
     after,
     selectionBefore: spec.selectionBefore,
     selectionAfter: spec.selectionAfter,
@@ -207,26 +240,156 @@ export function createMoveCommand(spec: MoveCommandSpec): Command {
     revert: () => {
       useDiagramStore.getState().setBlockPositions(before)
     },
-    mergeWith: (next, now) => {
-      if (mergeKey === null) return null
-      if (!isMoveCommand(next) || next.mergeKey !== mergeKey) return null
-      if (now > openUntil) return null
-
-      // The merged entry keeps *this* command's starting point and the new
-      // one's destination, so one undo walks the whole run back at once.
-      return createMoveCommand({
+    // The merged entry keeps *this* command's starting point and the new
+    // one's destination, so one undo walks the whole run back at once.
+    mergeWith: mergeHandler<'move', MoveCommand>(policy, (next, now) =>
+      createMoveCommand({
         ...spec,
         before,
         after: next.after,
         selectionAfter: next.selectionAfter,
-        mergeKey,
-        mergeWindowMs: window,
+        mergeKey: policy.mergeKey,
+        mergeWindowMs: policy.windowMs,
         now,
-      })
-    },
+      }),
+    ),
   }
 
   return command
+}
+
+/** Whichever style shape the target kind carries. */
+export type ElementStyle = BlockStyle | ConnectionStyle
+
+/**
+ * A style map: element id to the whole style object it should end up with, or
+ * `undefined` for "no style at all", which is how a block goes back to taking
+ * its colours from the stylesheet.
+ */
+export type StyleMap = Record<string, ElementStyle | undefined>
+
+export interface StyleCommandSpec extends MergeOptions {
+  label: string
+  /** Which map the ids index into. Styling never spans both in one command. */
+  target: 'blocks' | 'connections'
+  before: StyleMap
+  after: StyleMap
+  selectionBefore: SelectionSnapshot
+  selectionAfter: SelectionSnapshot
+}
+
+type StyleCommand = Mergeable<'style'> & { readonly after: StyleMap }
+
+const cloneStyleMap = (styles: StyleMap): StyleMap =>
+  Object.fromEntries(
+    Object.entries(styles).map(([id, style]) => [id, style ? { ...style } : undefined]),
+  )
+
+/**
+ * A style edit across a selection: two per-element style maps.
+ *
+ * Per-element on purpose. A command holding one "the colour was blue" value
+ * would repaint the whole selection blue on undo, when what the user had was
+ * five blocks in five different colours. Both directions are absolute, so this
+ * is idempotent for the same reason a move is.
+ *
+ * Mergeable, because dragging an `<input type="color">` fires `change` on
+ * every pointer move: without merging, one colour pick would leave dozens of
+ * entries and undo would crawl back through the gradient the user swept.
+ */
+export function createStyleCommand(spec: StyleCommandSpec): Command {
+  const before = cloneStyleMap(spec.before)
+  const after = cloneStyleMap(spec.after)
+  const policy = openMergePolicy('style', spec)
+
+  const write = (styles: StyleMap): void => {
+    const store = useDiagramStore.getState()
+    const patches = Object.fromEntries(
+      Object.entries(styles).map(([id, style]) => [
+        id,
+        { style: style ? { ...style } : undefined },
+      ]),
+    )
+    if (spec.target === 'blocks') store.updateBlocks(patches)
+    else store.updateConnections(patches)
+  }
+
+  const command: StyleCommand = {
+    kind: policy.kind,
+    label: spec.label,
+    mergeKey: policy.mergeKey,
+    after,
+    selectionBefore: spec.selectionBefore,
+    selectionAfter: spec.selectionAfter,
+    apply: () => {
+      write(after)
+    },
+    revert: () => {
+      write(before)
+    },
+    mergeWith: mergeHandler<'style', StyleCommand>(policy, (next, now) =>
+      createStyleCommand({
+        ...spec,
+        before,
+        after: next.after,
+        selectionAfter: next.selectionAfter,
+        mergeKey: policy.mergeKey,
+        mergeWindowMs: policy.windowMs,
+        now,
+      }),
+    ),
+  }
+
+  return command
+}
+
+export interface RegroupCommandSpec {
+  label: string
+  /** The groups that existed before, in full. */
+  before: GroupPlacement[]
+  /** The groups that should exist after. */
+  after: GroupPlacement[]
+  selectionBefore: SelectionSnapshot
+  selectionAfter: SelectionSnapshot
+}
+
+/**
+ * Grouping, ungrouping, and the absorb that happens when a selection spanning
+ * an existing group is grouped again — all three are the same edit.
+ *
+ * Each direction drops the groups the other side does not have and then writes
+ * the ones it does. `insertGroups` is an absolute overwrite rather than an
+ * insert-if-missing, which is what lets one factory serve every case: "group"
+ * is `before: []`, "ungroup" is `after: []`, and "absorb two groups into one"
+ * is both lists non-empty. Idempotent in both directions, because removal
+ * ignores ids it does not hold and the write is absolute.
+ */
+export function createRegroupCommand(spec: RegroupCommandSpec): Command {
+  const before = spec.before.map(({ group, index }) => ({
+    group: cloneGroup(group),
+    index,
+  }))
+  const after = spec.after.map(({ group, index }) => ({
+    group: cloneGroup(group),
+    index,
+  }))
+
+  const go = (from: GroupPlacement[], to: GroupPlacement[]) => () => {
+    const store = useDiagramStore.getState()
+    const surviving = new Set(to.map(({ group }) => group.id))
+    store.removeGroups(
+      from.map(({ group }) => group.id).filter((id) => !surviving.has(id)),
+    )
+    store.insertGroups(to)
+  }
+
+  return {
+    label: spec.label,
+    selectionBefore: spec.selectionBefore,
+    selectionAfter: spec.selectionAfter,
+    apply: go(before, after),
+    revert: go(after, before),
+  }
 }
 
 export interface PatchCommandSpec {

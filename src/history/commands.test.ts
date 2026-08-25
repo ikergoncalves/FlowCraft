@@ -195,6 +195,7 @@ describe('createAddCommand', () => {
         connections: [
           { connection: { id: 'xy', sourceId: 'x', targetId: 'y' }, index: 0 },
         ],
+        groups: [],
       },
       ...noSelection,
     })
@@ -229,6 +230,7 @@ describe('createAddCommand', () => {
             },
           ],
           connections: [],
+          groups: [],
         },
         ...noSelection,
       }),

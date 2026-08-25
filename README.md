@@ -173,7 +173,8 @@ The toolbar buttons are `disabled` when the matching stack is empty, and their
 tooltip names what the press would do — _Undo: Move 3 blocks_.
 
 **What is recorded:** creating, moving, nudging, resizing, deleting and
-renaming blocks; creating and deleting connections; pasting and duplicating.
+renaming blocks; creating and deleting connections; pasting and duplicating;
+styling blocks and connections; grouping and ungrouping.
 
 **What is not:** the viewport, the active tool, the Snap toggle, and selection
 on its own. Clicking around must not fill the history with entries that change
@@ -214,13 +215,87 @@ The clipboard is **internal to the editor** — not the system clipboard, which
 is permission-gated, asynchronous, and would mean accepting arbitrary data from
 outside the app.
 
-Copying takes the selected blocks and any connection with **both** ends among
-them; an arrow with one end left behind is dropped, because pasting it would
-either dangle or silently wire the copy back into the original diagram. Pasting
-mints new ids and **remaps** the copied connections onto them, so the copies
-wire to each other. Each paste is offset one grid step further than the last,
-so pasting three times leaves three visible copies rather than a pile. Every
-paste or duplicate is a single history entry.
+Copying takes the selected blocks, any connection with **both** ends among
+them, and any group **all** of whose members are along; an arrow with one end
+left behind is dropped, because pasting it would either dangle or silently wire
+the copy back into the original diagram, and a partly-selected group is left
+behind for the identical reason. Pasting mints new ids and **remaps** both the
+copied connections and the copied group memberships onto them, so the copies
+wire to and group with each other. Each paste is offset one grid step further
+than the last, so pasting three times leaves three visible copies rather than a
+pile. Every paste or duplicate is a single history entry.
+
+### Styling
+
+Selecting anything opens the **properties panel** in the top-right corner of
+the canvas. It edits the whole selection at once.
+
+| Element     | Properties                                                |
+| ----------- | --------------------------------------------------------- |
+| Blocks      | Fill, border colour, text colour, border width, text size |
+| Connections | Line colour, line width, dashed                           |
+
+Each colour field offers a small preset palette plus a native
+`<input type="color">` for anything else.
+
+**Mixed selections.** Where the selected elements disagree about a value, the
+panel says so rather than showing the first one's value and quietly speaking
+for the rest: colour fields grow a **Mixed** badge and highlight no swatch,
+number fields go blank with a `Mixed` placeholder, and the Dashed checkbox uses
+the platform's own indeterminate state. Setting a value from there applies it
+to everything selected; undo gives every element back **its own** former value,
+not one shared value.
+
+A block or arrow with **no style set renders entirely from the stylesheet** —
+every style field is optional and an unset one emits nothing at all. That is
+what lets Phase 6 swap a theme by editing custom properties rather than
+rewriting every element in the document.
+
+**Blocks and arrows get separate sections**, even when both are selected. The
+tempting intersection — both have a "stroke" and a "stroke width" — is a false
+friend: a block's stroke is the outline around a filled shape, an arrow's is
+the entire element, and one control driving both would make an arrow vanish
+while merely thinning a block's border.
+
+Dragging the colour picker fires a change event on every pointer move; those
+**merge into a single history entry**, the same way a held arrow key does.
+Editing a different property starts a new entry.
+
+### Grouping
+
+| Action               | Input                                      |
+| -------------------- | ------------------------------------------ |
+| Group the selection  | `Ctrl`/`Cmd` + `G`                         |
+| Ungroup              | `Ctrl`/`Cmd` + `Shift` + `G`               |
+| Select a whole group | Click any member                           |
+| Step into a group    | **Double-click** a member                  |
+| Edit a member's text | Double-click again, once inside            |
+| Move a group         | Drag any member — all move rigidly         |
+| Delete a group       | `Delete` — members and their arrows go too |
+
+A group needs at least two blocks, and a block belongs to at most one group. A
+group that drops below two members **dissolves**; deleting a member prunes it
+out of the group, and undo restores the membership exactly as it stood.
+
+A selected group is drawn with a **fine dotted outline set slightly outside its
+members**, distinct from the thin solid envelope a plain multi-selection gets.
+
+**Groups do not nest.** `Group` has no `groupIds` field, so a group inside a
+group is not merely unsupported — it is unrepresentable. Grouping a selection
+that already spans a group therefore _absorbs_ it: the members come across and
+the old group dissolves. Flattening rather than nesting avoids recursive
+traversal, cycle detection and the partial-ungroup question, none of which has
+an obvious right answer; and since clicking one member already selects the
+whole group, the situation arises constantly rather than rarely, so refusing it
+outright would fail an ordinary action for a reason the user cannot see.
+
+**Double-click, not `Alt` + click,** steps into a group. `Alt` already inverts
+snapping for the duration of a gesture, so an `Alt`-click that turned into a
+small drag would be entering a group and disabling the grid at once — two
+unrelated meanings on one modifier, told apart only by how far the pointer
+happened to travel.
+
+Resizing a group is out of scope: handles still appear only for a single block.
 
 ### View
 
@@ -249,6 +324,14 @@ paste or duplicate is a single history entry.
 - `insertBlocks`/`insertConnections` restore into the **slot the element came from**, not onto the end. `addBlock`'s explicit id was not enough on its own: undoing the delete of a block that sat underneath another would silently bring it back on top.
 - Every undoable operation lives in [src/history/actions.ts](src/history/actions.ts), and components call those rather than the store. "Which edits are undoable" is answerable by reading one file.
 - Constant-size affordances — resize handles, ports, connection hit areas, the arrowhead marker — are all `PIXELS / zoom`. The arrowhead uses `markerUnits="userSpaceOnUse"` with a `viewBox`, because `strokeWidth` units size the marker off the _declared_ stroke width and would fight `vector-effect="non-scaling-stroke"`.
+- Style overrides are applied as **inline style, never as presentation attributes**. In SVG a presentation attribute sits at the _bottom_ of the cascade, below every author rule, so `fill="#e2683c"` loses to `.block__shape { fill: … }` — the attribute is set, the DOM assertions pass, and the block still renders in the default colour. The browser harness caught exactly that; `getComputedStyle` in a real renderer was the only thing that disagreed. Inline style wins while staying per-property, so an unset field still falls through to the class.
+- Every style field is **optional, and an unset one emits nothing**. `resolveBlockStyle` fills defaults for the _panel_ to display; nothing writes them into the document. Resolving at render time would bake today's palette into every block the moment anyone opened the panel.
+- **One arrowhead marker per colour in use**, not per connection. A `<marker>` cannot inherit the colour of the path that references it — `context-stroke` is not portable — so the colour has to be baked in. Marker ids are derived from the colour string, which means a hundred red arrows share one marker and `<defs>` grows with the size of the palette rather than the size of the diagram. Selection is deliberately _not_ part of the key: a selected arrow gets a halo drawn underneath instead of being recoloured, so a user's colour survives selection and the head can never drift a different shade from its own line.
+- **Groups have no selection state of their own.** Selecting a group _is_ selecting its member blocks — every gesture widens a hit through `expandToGroups` — so "the group is selected" and "all its members are selected" are the same fact, derived by `selectedGroups`. Storing it as well would give move, delete, marquee and the bounding box a second source of truth to disagree with, and it means group move, group delete and the group cascade all fall out of the Phase 2–4 machinery with no new code paths.
+- `removeBlocks` **returns the groups it disturbed** alongside the connections it cascaded — shrunk ones as well as dissolved ones, in the state they were in beforehand. Same reasoning as the arrows: by the time undo runs, the membership it would have to reconstruct is gone.
+- `insertGroups` is the one restore primitive that is **absolute rather than insert-if-missing**. Deleting one member of a three-block group leaves the group alive with two, so undo has a group to put a member _back into_, not a group to re-create — an insert-if-missing primitive would silently do nothing in exactly that case.
+- **The merge policy is generic.** Phase 4 grew it inside `createMoveCommand`; Phase 5's colour picker needed the same thing, so it lives in [src/history/merge.ts](src/history/merge.ts) now. The split is deliberate: the module owns _whether_ two commands may fold together (same kind, same key, inside the window), and the command owns _what the folded command is_ — a helper cannot know that a move keeps the first `before` and the last `after`.
+- `ElementPlacements` took a **third element kind** without changing shape. `spliceInOrder` and `capturePlacements` were already written against "an id, an index and an order list" rather than against blocks specifically, so groups cost one more field and one more loop. Removal stays silent about groups on purpose: `removeBlocks` already prunes and dissolves, and a placement set always holds either all of a group's members or some of them, so an explicit `removeGroups` there would wipe a group that only lost one member.
 
 ## Status
 
@@ -258,7 +341,7 @@ In active development. Built in phases:
 2. ✅ Drag-and-drop, multi-select, resizing
 3. ✅ Connections between blocks, snap-to-grid
 4. ✅ Undo/redo (command pattern), keyboard shortcuts
-5. ⬜ Element styling, grouping
+5. ✅ Element styling, grouping
 6. ⬜ PNG/SVG export, IndexedDB auto-save, dark/light themes
 7. ⬜ Performance, Playwright E2E, deploy
 

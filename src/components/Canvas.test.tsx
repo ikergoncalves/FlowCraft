@@ -35,6 +35,8 @@ beforeEach(() => {
   useDiagramStore.setState({
     blocks: {},
     blockOrder: [],
+    groups: {},
+    groupOrder: [],
     viewport: DEFAULT_VIEWPORT,
     selectedIds: [],
     tool: 'select',

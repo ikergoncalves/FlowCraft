@@ -11,6 +11,8 @@ const reset = () =>
     blockOrder: [],
     connections: {},
     connectionOrder: [],
+    groups: {},
+    groupOrder: [],
     viewport: DEFAULT_VIEWPORT,
     selectedIds: [],
     selectedConnectionIds: [],

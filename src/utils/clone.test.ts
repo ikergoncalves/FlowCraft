@@ -155,3 +155,115 @@ describe('cloneElements', () => {
     )
   })
 })
+
+describe('collectElements with groups', () => {
+  /** The chain from `diagram()`, with a and b grouped. */
+  function grouped(): ElementSource {
+    const base = diagram()
+    return {
+      ...base,
+      groups: { g1: { id: 'g1', blockIds: ['a', 'b'] } },
+      groupOrder: ['g1'],
+    }
+  }
+
+  it('brings a wholly selected group along', () => {
+    const set = collectElements(grouped(), ['a', 'b'])
+    expect(set.groups).toEqual([{ id: 'g1', blockIds: ['a', 'b'] }])
+  })
+
+  it('leaves a partly selected group behind', () => {
+    // Same rule as a connection with one end outside the selection: bringing
+    // the group would produce membership pointing at blocks nobody copied.
+    const set = collectElements(grouped(), ['a'])
+    expect(set.groups).toEqual([])
+  })
+
+  it('brings the group when other blocks are selected as well', () => {
+    const set = collectElements(grouped(), ['a', 'b', 'c'])
+    expect(set.groups.map((group) => group.id)).toEqual(['g1'])
+  })
+
+  it('copies the member list rather than sharing the source array', () => {
+    const source = grouped()
+    const set = collectElements(source, ['a', 'b'])
+
+    set.groups[0]?.blockIds.push('mutated')
+    expect(source.groups.g1?.blockIds).toEqual(['a', 'b'])
+  })
+})
+
+describe('cloneElements with groups', () => {
+  const set = () => ({
+    blocks: [block('a'), block('b', 200)],
+    connections: [connection('ab', 'a', 'b')],
+    groups: [{ id: 'g1', blockIds: ['a', 'b'] }],
+  })
+
+  it('remaps the group onto the copied blocks', () => {
+    // The failure this guards is invisible until something moves: a group
+    // whose members are the *originals* drags the originals around.
+    const clone = cloneElements(set(), { x: 40, y: 40 }, idFactory())
+    const copiedIds = clone.blocks.map((item) => item.id)
+
+    expect(clone.groups[0]?.blockIds).toEqual(copiedIds)
+    expect(clone.groups[0]?.blockIds).not.toContain('a')
+    expect(clone.groups[0]?.blockIds).not.toContain('b')
+  })
+
+  it('gives the group a fresh id of its own', () => {
+    const clone = cloneElements(set(), { x: 0, y: 0 }, idFactory())
+    expect(clone.groups[0]?.id).not.toBe('g1')
+  })
+
+  it('mints ids nothing else in the clone shares', () => {
+    const clone = cloneElements(set(), { x: 0, y: 0 }, idFactory())
+    const ids = [
+      ...clone.blocks.map((item) => item.id),
+      ...clone.connections.map((item) => item.id),
+      ...clone.groups.map((item) => item.id),
+    ]
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('drops a group whose members are not all in the set', () => {
+    // Never produced by `collectElements`; this is the last line of defence.
+    const partial = {
+      blocks: [block('a')],
+      connections: [],
+      groups: [{ id: 'g1', blockIds: ['a', 'x'] }],
+    }
+    expect(cloneElements(partial, { x: 0, y: 0 }, idFactory()).groups).toEqual([])
+  })
+
+  it('drops a group that would come out below two members', () => {
+    const tiny = {
+      blocks: [block('a')],
+      connections: [],
+      groups: [{ id: 'g1', blockIds: ['a'] }],
+    }
+    expect(cloneElements(tiny, { x: 0, y: 0 }, idFactory()).groups).toEqual([])
+  })
+
+  it('leaves the source group untouched', () => {
+    const original = set()
+    cloneElements(original, { x: 50, y: 50 }, idFactory())
+    expect(original.groups[0]).toEqual({ id: 'g1', blockIds: ['a', 'b'] })
+  })
+
+  it('round-trips: collect a grouped slice, clone it, and the group survives', () => {
+    const source: ElementSource = {
+      ...diagram(),
+      groups: { g1: { id: 'g1', blockIds: ['a', 'b'] } },
+      groupOrder: ['g1'],
+    }
+    const clone = cloneElements(
+      collectElements(source, ['a', 'b']),
+      { x: 20, y: 20 },
+      idFactory(),
+    )
+
+    expect(clone.groups).toHaveLength(1)
+    expect(clone.groups[0]?.blockIds).toHaveLength(2)
+  })
+})

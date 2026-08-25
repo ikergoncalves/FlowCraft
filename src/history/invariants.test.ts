@@ -3,6 +3,7 @@ import { clearClipboard } from '../store/clipboard'
 import { useDiagramStore } from '../store/diagramStore'
 import type { Block } from '../types'
 import { DEFAULT_VIEWPORT } from '../utils/coords'
+import { MIN_GROUP_SIZE } from '../utils/groups'
 import {
   commitMove,
   commitResize,
@@ -12,8 +13,12 @@ import {
   createConnection,
   deleteSelection,
   duplicateSelection,
+  groupSelection,
   nudgeSelection,
   pasteClipboard,
+  styleBlocks,
+  styleConnections,
+  ungroupSelection,
 } from './actions'
 import { useHistoryStore } from './historyStore'
 
@@ -40,6 +45,8 @@ const documentState = () =>
     blockOrder: store().blockOrder,
     connections: store().connections,
     connectionOrder: store().connectionOrder,
+    groups: store().groups,
+    groupOrder: store().groupOrder,
   })
 
 const rectOf = (id: string) => {
@@ -58,11 +65,17 @@ const positionsOf = (ids: readonly string[]): Record<string, { x: number; y: num
   )
 
 /**
- * The three structural rules that must hold no matter what has happened.
+ * The structural rules that must hold no matter what has happened.
  *
  * Checked after every single step, not just at the end: an invariant that
  * breaks in the middle and repairs itself by accident is still a bug, and
  * checking only the endpoints is exactly how it hides.
+ *
+ * Phase 5 added the three group rules at the bottom. They are the group
+ * counterpart of "no orphaned connection": a group naming a block that no
+ * longer exists is exactly as broken as an arrow pointing at one, and the
+ * other two — one group per block, never fewer than two members — are the
+ * rules the whole gesture layer assumes when it widens a click into a group.
  */
 function expectStructurallySound(where: string): void {
   const state = store()
@@ -92,6 +105,36 @@ function expectStructurallySound(where: string): void {
       true,
     )
   }
+
+  expect(Object.keys(state.groups).sort(), `${where}: groups vs groupOrder`).toEqual(
+    [...state.groupOrder].sort(),
+  )
+  expect(state.groupOrder, `${where}: duplicate ids in groupOrder`).toHaveLength(
+    new Set(state.groupOrder).size,
+  )
+
+  const owner = new Map<string, string>()
+  for (const id of state.groupOrder) {
+    const group = state.groups[id]
+    if (!group) continue
+
+    expect(
+      group.blockIds.length,
+      `${where}: group ${id} has ${group.blockIds.length} members`,
+    ).toBeGreaterThanOrEqual(MIN_GROUP_SIZE)
+
+    for (const blockId of group.blockIds) {
+      expect(
+        blockId in state.blocks,
+        `${where}: group ${id} names dead block ${blockId}`,
+      ).toBe(true)
+      expect(
+        owner.get(blockId),
+        `${where}: ${blockId} is in ${owner.get(blockId) ?? ''} and ${id}`,
+      ).toBeUndefined()
+      owner.set(blockId, id)
+    }
+  }
 }
 
 const seedBlock = (id: string, x: number, y: number): Block =>
@@ -119,6 +162,8 @@ beforeEach(() => {
     blockOrder: [],
     connections: {},
     connectionOrder: [],
+    groups: {},
+    groupOrder: [],
     viewport: DEFAULT_VIEWPORT,
     selectedIds: [],
     selectedConnectionIds: [],
@@ -206,7 +251,39 @@ const SCRIPT: Step[] = [
     },
   },
   {
-    name: 'delete b, cascading its arrows',
+    name: 'style a and b together',
+    run: () => {
+      store().select(['a', 'b'])
+      styleBlocks({ fill: '#ff0044' }, 'fill', 'fill')
+    },
+  },
+  {
+    name: 'style c on its own',
+    run: () => {
+      // A different selection, so a different merge key: this must stay a
+      // separate entry from the one above however fast the script runs.
+      store().select('c')
+      styleBlocks({ fill: '#22cc88', strokeWidth: 3 }, 'fill', 'fill')
+    },
+  },
+  {
+    name: 'style a connection',
+    run: () => {
+      const id = store().connectionOrder[0]
+      if (id === undefined) throw new Error('expected a connection to style')
+      store().selectConnections(id)
+      styleConnections({ stroke: '#ffaa00', dashed: true }, 'stroke', 'line colour')
+    },
+  },
+  {
+    name: 'group a, b and c',
+    run: () => {
+      store().select(['a', 'b', 'c'])
+      groupSelection()
+    },
+  },
+  {
+    name: 'delete b, cascading its arrows and shrinking its group',
     run: () => {
       store().select('b')
       deleteSelection()
@@ -217,6 +294,35 @@ const SCRIPT: Step[] = [
     run: () => {
       store().select('c')
       nudgeSelection(0, 20)
+    },
+  },
+  {
+    name: 'group the two newest blocks',
+    run: () => {
+      store().select(store().blockOrder.slice(-2))
+      groupSelection()
+    },
+  },
+  {
+    name: 'ungroup them again',
+    run: () => {
+      store().select(store().blockOrder.slice(-2))
+      ungroupSelection()
+    },
+  },
+  {
+    name: 'absorb the a/c group into a larger one',
+    run: () => {
+      // Grouping a selection that already spans a group flattens rather than
+      // nests — the old group must be gone afterwards, not inside the new one.
+      store().select(['a', 'c', ...store().blockOrder.slice(-1)])
+      groupSelection()
+    },
+  },
+  {
+    name: 'style the grouped blocks',
+    run: () => {
+      styleBlocks({ textColor: '#000000', fontSize: 18 }, 'textColor', 'text colour')
     },
   },
   {
@@ -367,5 +473,156 @@ describe('paste under undo', () => {
     expect(copiedIds.has(copiedConnection?.targetId ?? '')).toBe(true)
     expect(copiedConnection?.sourceId).not.toBe('a')
     expect(copiedConnection?.targetId).not.toBe('b')
+  })
+})
+
+describe('groups under undo', () => {
+  it('the script actually exercises grouping', () => {
+    // Guards the guard: an invariant checked over a script that never makes a
+    // group proves nothing about groups. This asserts the script does.
+    seedDiagram()
+    let sawGroup = false
+    for (const step of SCRIPT) {
+      step.run()
+      if (store().groupOrder.length > 0) sawGroup = true
+    }
+    expect(sawGroup).toBe(true)
+  })
+
+  it('the script actually exercises styling', () => {
+    seedDiagram()
+    let sawStyle = false
+    for (const step of SCRIPT) {
+      step.run()
+      if (Object.values(store().blocks).some((block) => block.style !== undefined)) {
+        sawStyle = true
+      }
+    }
+    expect(sawStyle).toBe(true)
+  })
+
+  it('puts a dissolved group back when its delete is undone', () => {
+    seedDiagram()
+    store().select(['a', 'b'])
+    groupSelection()
+    const groupId = store().groupOrder[0]
+
+    store().select(['a', 'b'])
+    deleteSelection()
+    expect(store().groupOrder).toEqual([])
+
+    history().undo()
+    expect(store().groupOrder).toEqual([groupId])
+    expect(store().groups[groupId ?? '']?.blockIds).toEqual(['a', 'b'])
+    expectStructurallySound('after undoing a grouped delete')
+  })
+
+  it('restores the membership of a group that only shrank', () => {
+    seedDiagram()
+    store().select(['a', 'b', 'c'])
+    groupSelection()
+    const groupId = store().groupOrder[0] ?? ''
+
+    store().select('b')
+    deleteSelection()
+    expect(store().groups[groupId]?.blockIds).toEqual(['a', 'c'])
+
+    history().undo()
+    expect(store().groups[groupId]?.blockIds).toEqual(['a', 'b', 'c'])
+  })
+
+  it('undoes an absorb back into the two groups it flattened', () => {
+    seedDiagram()
+    store().select(['a', 'b'])
+    groupSelection()
+    const first = store().groupOrder[0] ?? ''
+
+    store().select(['a', 'b', 'c'])
+    groupSelection()
+    expect(store().groupOrder).toHaveLength(1)
+    expect(store().groupOrder[0]).not.toBe(first)
+
+    history().undo()
+    expect(store().groupOrder).toEqual([first])
+    expect(store().groups[first]?.blockIds).toEqual(['a', 'b'])
+    expectStructurallySound('after undoing an absorb')
+  })
+
+  it('never nests: a group can only ever name blocks', () => {
+    seedDiagram()
+    store().select(['a', 'b'])
+    groupSelection()
+    store().select(['a', 'b', 'c'])
+    groupSelection()
+
+    for (const id of store().groupOrder) {
+      for (const blockId of store().groups[id]?.blockIds ?? []) {
+        expect(blockId in store().blocks).toBe(true)
+        expect(blockId in store().groups).toBe(false)
+      }
+    }
+  })
+
+  it('redoes a group after undoing it', () => {
+    seedDiagram()
+    store().select(['a', 'b'])
+    groupSelection()
+    const snapshot = documentState()
+
+    history().undo()
+    expect(store().groupOrder).toEqual([])
+    history().redo()
+
+    expect(documentState()).toEqual(snapshot)
+  })
+})
+
+describe('styles under undo', () => {
+  it('gives each block back its own former style, not one shared value', () => {
+    seedDiagram()
+    store().select('a')
+    styleBlocks({ fill: '#111111' }, 'fill', 'fill')
+    store().select('b')
+    styleBlocks({ fill: '#222222' }, 'fill', 'fill')
+
+    store().select(['a', 'b'])
+    styleBlocks({ fill: '#333333' }, 'fill', 'fill')
+    expect(store().blocks.a?.style?.fill).toBe('#333333')
+    expect(store().blocks.b?.style?.fill).toBe('#333333')
+
+    history().undo()
+    expect(store().blocks.a?.style?.fill).toBe('#111111')
+    expect(store().blocks.b?.style?.fill).toBe('#222222')
+  })
+
+  it('takes a style back to no style at all', () => {
+    seedDiagram()
+    store().select('a')
+    styleBlocks({ fill: '#111111' }, 'fill', 'fill')
+
+    history().undo()
+    expect(store().blocks.a?.style).toBeUndefined()
+  })
+
+  it('records nothing when the value does not change', () => {
+    seedDiagram()
+    store().select('a')
+    styleBlocks({ fill: '#111111' }, 'fill', 'fill')
+    const depth = history().undoStack.length
+
+    styleBlocks({ fill: '#111111' }, 'fill', 'fill')
+    expect(history().undoStack).toHaveLength(depth)
+  })
+
+  it('keeps a connection style through a cascaded delete and its undo', () => {
+    seedDiagram()
+    store().selectConnections('ab')
+    styleConnections({ stroke: '#ffaa00', dashed: true }, 'stroke', 'line colour')
+
+    store().select('a')
+    deleteSelection()
+    history().undo()
+
+    expect(store().connections.ab?.style).toEqual({ stroke: '#ffaa00', dashed: true })
   })
 })

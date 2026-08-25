@@ -7,10 +7,13 @@ import {
   MERGE_WINDOW_MS,
   capturePlacements,
   cascadeConnectionIds,
+  cascadeGroupIds,
   createAddCommand,
   createMoveCommand,
   createPatchCommand,
+  createRegroupCommand,
   createRemoveCommand,
+  createStyleCommand,
 } from './commands'
 
 /*
@@ -73,6 +76,8 @@ beforeEach(() => {
     blockOrder: [],
     connections: {},
     connectionOrder: [],
+    groups: {},
+    groupOrder: [],
     viewport: DEFAULT_VIEWPORT,
     selectedIds: [],
     selectedConnectionIds: [],
@@ -522,5 +527,403 @@ describe('createPatchCommand', () => {
       command.revert()
     }).not.toThrow()
     expect(store().blockOrder).toEqual([])
+  })
+})
+
+describe('cascadeGroupIds', () => {
+  const seedGroup = (id: string, ...blockIds: string[]) =>
+    store().addGroup({ id, blockIds })
+
+  it('finds a group a doomed block belongs to', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    seedGroup('g1', 'a', 'b')
+
+    expect(cascadeGroupIds(store(), ['a'])).toEqual(['g1'])
+  })
+
+  it('reports a group that will merely shrink, not only one that dissolves', () => {
+    // Undoing a delete has to restore membership as well as blocks.
+    seedBlock('a')
+    seedBlock('b', 300)
+    seedBlock('c', 600)
+    seedGroup('g1', 'a', 'b', 'c')
+
+    expect(cascadeGroupIds(store(), ['a'])).toEqual(['g1'])
+  })
+
+  it('finds nothing when no group is touched', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    seedBlock('z', 900)
+    seedGroup('g1', 'a', 'b')
+
+    expect(cascadeGroupIds(store(), ['z'])).toEqual([])
+  })
+
+  it('reports each group once however many of its members go', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    seedGroup('g1', 'a', 'b')
+
+    expect(cascadeGroupIds(store(), ['a', 'b'])).toEqual(['g1'])
+  })
+})
+
+describe('createStyleCommand', () => {
+  it('applies a style to every named block and takes it back', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    const command = createStyleCommand({
+      label: 'Set fill',
+      target: 'blocks',
+      before: { a: undefined, b: undefined },
+      after: { a: { fill: '#ff0000' }, b: { fill: '#ff0000' } },
+      ...noSelection,
+    })
+
+    command.apply()
+    expect(store().blocks.a?.style?.fill).toBe('#ff0000')
+    expect(store().blocks.b?.style?.fill).toBe('#ff0000')
+
+    command.revert()
+    expect(store().blocks.a?.style).toBeUndefined()
+    expect(store().blocks.b?.style).toBeUndefined()
+  })
+
+  it('restores each block its own former value, not one shared value', () => {
+    // The failure this catches: a command that stored "the colour was blue"
+    // rather than a per-element map would repaint the whole selection blue.
+    seedBlock('a')
+    seedBlock('b', 300)
+    store().updateBlocks({
+      a: { style: { fill: '#111111' } },
+      b: { style: { fill: '#222222' } },
+    })
+
+    const command = createStyleCommand({
+      label: 'Set fill',
+      target: 'blocks',
+      before: { a: { fill: '#111111' }, b: { fill: '#222222' } },
+      after: { a: { fill: '#00ff00' }, b: { fill: '#00ff00' } },
+      ...noSelection,
+    })
+
+    command.apply()
+    command.revert()
+
+    expect(store().blocks.a?.style?.fill).toBe('#111111')
+    expect(store().blocks.b?.style?.fill).toBe('#222222')
+  })
+
+  it('styles connections when told to', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    seedConnection('ab', 'a', 'b')
+
+    const command = createStyleCommand({
+      label: 'Set line colour',
+      target: 'connections',
+      before: { ab: undefined },
+      after: { ab: { stroke: '#ff0000', dashed: true } },
+      ...noSelection,
+    })
+
+    command.apply()
+    expect(store().connections.ab?.style).toEqual({ stroke: '#ff0000', dashed: true })
+    command.revert()
+    expect(store().connections.ab?.style).toBeUndefined()
+  })
+
+  it('is idempotent under replay', () => {
+    seedBlock('a')
+    expectIdempotent(
+      createStyleCommand({
+        label: 'Set fill',
+        target: 'blocks',
+        before: { a: undefined },
+        after: { a: { fill: '#ff0000' } },
+        ...noSelection,
+      }),
+    )
+  })
+
+  it('copies the style maps it was handed', () => {
+    seedBlock('a')
+    const after = { a: { fill: '#ff0000' } }
+    const command = createStyleCommand({
+      label: 'Set fill',
+      target: 'blocks',
+      before: { a: undefined },
+      after,
+      ...noSelection,
+    })
+
+    after.a.fill = '#00ff00'
+    command.apply()
+    expect(store().blocks.a?.style?.fill).toBe('#ff0000')
+  })
+
+  it('never hands the store an object the command still holds', () => {
+    seedBlock('a')
+    const command = createStyleCommand({
+      label: 'Set fill',
+      target: 'blocks',
+      before: { a: undefined },
+      after: { a: { fill: '#ff0000' } },
+      ...noSelection,
+    })
+
+    command.apply()
+    // Mutating what landed in the store must not rewrite the history's copy.
+    const stored = store().blocks.a?.style
+    if (stored) stored.fill = '#00ff00'
+    command.apply()
+    expect(store().blocks.a?.style?.fill).toBe('#ff0000')
+  })
+})
+
+describe('style merging', () => {
+  const styleEdit = (from: string, to: string, now: number, key = 'style:fill:a') =>
+    createStyleCommand({
+      label: 'Set fill',
+      target: 'blocks',
+      before: { a: { fill: from } },
+      after: { a: { fill: to } },
+      mergeKey: key,
+      now,
+      ...noSelection,
+    })
+
+  it('folds a sweep of the colour picker into one entry', () => {
+    seedBlock('a')
+    let command: Command = styleEdit('#000000', '#010101', 0)
+    for (let i = 1; i <= 20; i += 1) {
+      const at = i * 10
+      const merged = command.mergeWith?.(styleEdit('#010101', `#00000${i % 10}`, at), at)
+      expect(merged).not.toBeNull()
+      if (merged) command = merged
+    }
+
+    command.revert()
+    // One undo walks the whole sweep back to where it started.
+    expect(store().blocks.a?.style?.fill).toBe('#000000')
+  })
+
+  it('declines once the window has passed', () => {
+    const first = styleEdit('#000000', '#111111', 1000)
+    const late = 1000 + MERGE_WINDOW_MS + 1
+    expect(first.mergeWith?.(styleEdit('#111111', '#222222', late), late)).toBeNull()
+  })
+
+  it('declines a different field, so fill then stroke stays two entries', () => {
+    const first = styleEdit('#000000', '#111111', 1000)
+    const other = styleEdit('#000000', '#111111', 1100, 'style:stroke:a')
+    expect(first.mergeWith?.(other, 1100)).toBeNull()
+  })
+
+  it('declines a move, however fast it follows', () => {
+    const first = styleEdit('#000000', '#111111', 1000)
+    const move = createMoveCommand({
+      label: 'Move block',
+      before: { a: { x: 0, y: 0 } },
+      after: { a: { x: 1, y: 0 } },
+      mergeKey: 'style:fill:a',
+      now: 1010,
+      ...noSelection,
+    })
+    expect(first.mergeWith?.(move, 1010)).toBeNull()
+  })
+})
+
+describe('createRegroupCommand', () => {
+  const placement = (id: string, ...blockIds: string[]) => ({
+    group: { id, blockIds },
+    index: 0,
+  })
+
+  it('groups on apply and ungroups on revert', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    const command = createRegroupCommand({
+      label: 'Group 2 blocks',
+      before: [],
+      after: [placement('g1', 'a', 'b')],
+      ...noSelection,
+    })
+
+    command.apply()
+    expect(store().groupOrder).toEqual(['g1'])
+    command.revert()
+    expect(store().groupOrder).toEqual([])
+  })
+
+  it('runs the other way round for an ungroup', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    const command = createRegroupCommand({
+      label: 'Ungroup group',
+      before: [placement('g1', 'a', 'b')],
+      after: [],
+      ...noSelection,
+    })
+
+    command.apply()
+    expect(store().groupOrder).toEqual([])
+    command.revert()
+    expect(store().groups.g1?.blockIds).toEqual(['a', 'b'])
+  })
+
+  it('absorbs one group into another and puts both back', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    seedBlock('c', 600)
+    store().addGroup({ id: 'g1', blockIds: ['a', 'b'] })
+
+    const command = createRegroupCommand({
+      label: 'Group 3 blocks',
+      before: [placement('g1', 'a', 'b')],
+      after: [{ group: { id: 'g2', blockIds: ['a', 'b', 'c'] }, index: 1 }],
+      ...noSelection,
+    })
+
+    command.apply()
+    expect(store().groupOrder).toEqual(['g2'])
+
+    command.revert()
+    expect(store().groupOrder).toEqual(['g1'])
+    expect(store().groups.g1?.blockIds).toEqual(['a', 'b'])
+  })
+
+  it('is idempotent in both directions', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    const command = createRegroupCommand({
+      label: 'Group 2 blocks',
+      before: [],
+      after: [placement('g1', 'a', 'b')],
+      ...noSelection,
+    })
+
+    command.apply()
+    command.apply()
+    expect(store().groupOrder).toEqual(['g1'])
+
+    command.revert()
+    command.revert()
+    expect(store().groupOrder).toEqual([])
+  })
+
+  it('copies the placements it was handed', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    const after = placement('g1', 'a', 'b')
+    const command = createRegroupCommand({
+      label: 'Group 2 blocks',
+      before: [],
+      after: [after],
+      ...noSelection,
+    })
+
+    after.group.blockIds.push('mutated')
+    command.apply()
+    expect(store().groups.g1?.blockIds).toEqual(['a', 'b'])
+  })
+})
+
+describe('placements with groups', () => {
+  it('captures a group with the slot it occupied', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    store().addGroup({ id: 'g1', blockIds: ['a', 'b'] })
+
+    expect(capturePlacements(store(), [], [], ['g1']).groups).toEqual([
+      { group: { id: 'g1', blockIds: ['a', 'b'] }, index: 0 },
+    ])
+  })
+
+  it('captures no groups when none are asked for', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    store().addGroup({ id: 'g1', blockIds: ['a', 'b'] })
+
+    expect(capturePlacements(store(), ['a'], []).groups).toEqual([])
+  })
+
+  it('restores a group when a remove command is reverted', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    store().addGroup({ id: 'g1', blockIds: ['a', 'b'] })
+
+    const command = createRemoveCommand({
+      label: 'Delete 2 blocks',
+      placements: capturePlacements(store(), ['a', 'b'], [], ['g1']),
+      ...noSelection,
+    })
+
+    command.apply()
+    expect(store().blockOrder).toEqual([])
+    expect(store().groupOrder).toEqual([])
+
+    command.revert()
+    expect(store().blockOrder).toEqual(['a', 'b'])
+    expect(store().groups.g1?.blockIds).toEqual(['a', 'b'])
+  })
+
+  it('restores the membership of a group that only shrank', () => {
+    seedBlock('a')
+    seedBlock('b', 300)
+    seedBlock('c', 600)
+    store().addGroup({ id: 'g1', blockIds: ['a', 'b', 'c'] })
+
+    const command = createRemoveCommand({
+      label: 'Delete block',
+      placements: capturePlacements(store(), ['a'], [], ['g1']),
+      ...noSelection,
+    })
+
+    command.apply()
+    expect(store().groups.g1?.blockIds).toEqual(['b', 'c'])
+
+    command.revert()
+    expect(store().groups.g1?.blockIds).toEqual(['a', 'b', 'c'])
+  })
+
+  it('dissolves a pasted group again when the paste is undone', () => {
+    seedBlock('a')
+    const command = createAddCommand({
+      label: 'Paste 2 blocks',
+      placements: {
+        blocks: [
+          {
+            block: { id: 'x', type: 'rect', x: 0, y: 0, width: 10, height: 10, text: '' },
+            index: 1,
+          },
+          {
+            block: {
+              id: 'y',
+              type: 'rect',
+              x: 20,
+              y: 0,
+              width: 10,
+              height: 10,
+              text: '',
+            },
+            index: 2,
+          },
+        ],
+        connections: [],
+        groups: [{ group: { id: 'g1', blockIds: ['x', 'y'] }, index: 0 }],
+      },
+      ...noSelection,
+    })
+
+    command.apply()
+    expect(store().groupOrder).toEqual(['g1'])
+
+    // Removing every member is what dissolves it — `removeElements` never
+    // names a group, deliberately.
+    command.revert()
+    expect(store().groupOrder).toEqual([])
   })
 })

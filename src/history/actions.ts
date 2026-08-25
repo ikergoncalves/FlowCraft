@@ -1,10 +1,21 @@
 import { nextPasteOrdinal, readClipboard, writeClipboard } from '../store/clipboard'
 import { useDiagramStore, type BlockInit, type DiagramState } from '../store/diagramStore'
-import type { AnchorSide, Block, Connection, Point } from '../types'
+import type {
+  AnchorSide,
+  Block,
+  BlockStyle,
+  Connection,
+  ConnectionStyle,
+  Group,
+  Point,
+} from '../types'
 import { GRID_SIZE } from '../utils/coords'
 import { cloneElements, collectElements, type ElementSet } from '../utils/clone'
 import type { Rect } from '../utils/geometry'
+import { MIN_GROUP_SIZE, selectedGroups } from '../utils/groups'
+import { createId } from '../utils/id'
 import {
+  cloneGroup,
   describeCount,
   describeElements,
   EMPTY_SELECTION,
@@ -13,11 +24,15 @@ import {
 import {
   capturePlacements,
   cascadeConnectionIds,
+  cascadeGroupIds,
   createAddCommand,
   createMoveCommand,
   createPatchCommand,
+  createRegroupCommand,
   createRemoveCommand,
+  createStyleCommand,
   type ElementPlacements,
+  type StyleMap,
 } from './commands'
 import { useHistoryStore } from './historyStore'
 
@@ -188,7 +203,17 @@ export function commitBlockText(id: string, text: string): void {
 
 /* -- Keyboard operations -------------------------------------------------- */
 
-/** Deletes the selection — blocks, arrows, and the cascade — as one entry. */
+/**
+ * Deletes the selection — blocks, arrows, the arrow cascade and the group
+ * memberships — as one entry.
+ *
+ * Deleting a group deletes its members, and that needs no special case:
+ * selecting any member widens the selection to the whole group, so by the time
+ * Delete is pressed the members *are* the selection. What does need care is
+ * the third cascade — a group that loses a member either shrinks or dissolves,
+ * and `cascadeGroupIds` captures both so undo can put the membership back
+ * exactly as it stood.
+ */
 export function deleteSelection(): void {
   const state = useDiagramStore.getState()
   if (state.selectedIds.length === 0 && state.selectedConnectionIds.length === 0) return
@@ -198,7 +223,8 @@ export function deleteSelection(): void {
     state.selectedIds,
     state.selectedConnectionIds,
   )
-  const placements = capturePlacements(state, state.selectedIds, connectionIds)
+  const groupIds = cascadeGroupIds(state, state.selectedIds)
+  const placements = capturePlacements(state, state.selectedIds, connectionIds, groupIds)
   if (placements.blocks.length === 0 && placements.connections.length === 0) return
 
   history().run(
@@ -284,12 +310,15 @@ function insertCopy(clone: ElementSet, verb: string): void {
   const blockBase = state.blockOrder.length
   const connectionBase = state.connectionOrder.length
 
+  const groupBase = state.groupOrder.length
+
   const placements: ElementPlacements = {
     blocks: clone.blocks.map((block, offset) => ({ block, index: blockBase + offset })),
     connections: clone.connections.map((connection, offset) => ({
       connection,
       index: connectionBase + offset,
     })),
+    groups: clone.groups.map((group, offset) => ({ group, index: groupBase + offset })),
   }
 
   history().run(
@@ -330,4 +359,181 @@ export function duplicateSelection(): void {
   if (contents.blocks.length === 0) return
 
   insertCopy(cloneElements(contents, { x: GRID_SIZE, y: GRID_SIZE }), 'Duplicate')
+}
+
+/* -- Styling -------------------------------------------------------------- */
+
+/**
+ * Whether a style patch would actually change anything.
+ *
+ * A style edit that changes nothing must not reach the history: the panel is a
+ * controlled component, so a re-render that echoes the current value back
+ * would otherwise leave an entry per render.
+ */
+function differs(before: StyleMap, after: StyleMap): boolean {
+  return Object.keys(after).some(
+    (id) => JSON.stringify(before[id] ?? null) !== JSON.stringify(after[id] ?? null),
+  )
+}
+
+/**
+ * Applies a style patch to every selected block as one entry.
+ *
+ * `field` names the property being edited and does two jobs: it labels the
+ * entry, and it keys the merge — so sweeping the fill picker collapses into
+ * one entry while fill-then-stroke stays two. `label` is the human wording,
+ * because "Set strokeWidth" reads like a variable name.
+ */
+export function styleBlocks(
+  patch: BlockStyle,
+  field: keyof BlockStyle,
+  label: string,
+): void {
+  const state = useDiagramStore.getState()
+  const ids = state.selectedIds.filter((id) => id in state.blocks)
+  if (ids.length === 0) return
+
+  const before: StyleMap = {}
+  const after: StyleMap = {}
+  for (const id of ids) {
+    const block = state.blocks[id]
+    if (!block) continue
+    before[id] = block.style ? { ...block.style } : undefined
+    after[id] = { ...block.style, ...patch }
+  }
+  if (!differs(before, after)) return
+
+  const selection = captureSelection(state)
+  history().run(
+    createStyleCommand({
+      label: `Set ${label}`,
+      target: 'blocks',
+      before,
+      after,
+      selectionBefore: selection,
+      selectionAfter: selection,
+      mergeKey: `style:blocks:${field}:${[...ids].sort().join(',')}`,
+    }),
+  )
+}
+
+/** `styleBlocks` for the selected connections. */
+export function styleConnections(
+  patch: ConnectionStyle,
+  field: keyof ConnectionStyle,
+  label: string,
+): void {
+  const state = useDiagramStore.getState()
+  const ids = state.selectedConnectionIds.filter((id) => id in state.connections)
+  if (ids.length === 0) return
+
+  const before: StyleMap = {}
+  const after: StyleMap = {}
+  for (const id of ids) {
+    const connection = state.connections[id]
+    if (!connection) continue
+    before[id] = connection.style ? { ...connection.style } : undefined
+    after[id] = { ...connection.style, ...patch }
+  }
+  if (!differs(before, after)) return
+
+  const selection = captureSelection(state)
+  history().run(
+    createStyleCommand({
+      label: `Set ${label}`,
+      target: 'connections',
+      before,
+      after,
+      selectionBefore: selection,
+      selectionAfter: selection,
+      mergeKey: `style:connections:${field}:${[...ids].sort().join(',')}`,
+    }),
+  )
+}
+
+/* -- Grouping ------------------------------------------------------------- */
+
+/** Every group with at least one member among `blockIds`, with its slot. */
+function groupPlacementsFor(state: DiagramState, blockIds: readonly string[]) {
+  return capturePlacements(state, [], [], cascadeGroupIds(state, blockIds)).groups
+}
+
+/**
+ * Groups the selected blocks and records one entry.
+ *
+ * Returns the new group, or `null` when the selection is too small to group.
+ * A selection spanning an existing group *absorbs* it — see the note on
+ * `Group` for why flattening beats nesting — and a group that is only partly
+ * absorbed keeps whatever members are left, or dissolves if that is fewer than
+ * two. The whole rearrangement is one command, so undo restores the previous
+ * arrangement of groups exactly rather than leaving the remains of one behind.
+ */
+export function groupSelection(): Group | null {
+  const state = useDiagramStore.getState()
+  const wanted = new Set(state.selectedIds.filter((id) => id in state.blocks))
+  if (wanted.size < MIN_GROUP_SIZE) return null
+
+  // Paint order, not click order: a group's member list is the same kind of
+  // list as `blockOrder`, and keeping them consistent means a restored group
+  // reads the same however its members were selected.
+  const blockIds = state.blockOrder.filter((id) => wanted.has(id))
+  const group: Group = { id: createId(), blockIds }
+
+  const before = groupPlacementsFor(state, blockIds)
+  const survivors = before
+    .map(({ group: existing, index }) => ({
+      group: {
+        ...existing,
+        blockIds: existing.blockIds.filter((id) => !wanted.has(id)),
+      },
+      index,
+    }))
+    .filter(({ group: shrunk }) => shrunk.blockIds.length >= MIN_GROUP_SIZE)
+
+  const selection = captureSelection(state)
+  history().run(
+    createRegroupCommand({
+      label: `Group ${describeCount(blockIds.length, 'block')}`,
+      before,
+      after: [...survivors, { group, index: state.groupOrder.length }],
+      selectionBefore: selection,
+      selectionAfter: { blockIds, connectionIds: [] },
+    }),
+  )
+  return group
+}
+
+/**
+ * Dissolves every group whose members are all selected, as one entry.
+ *
+ * "Fully selected" rather than "touched by the selection": a group is selected
+ * as a whole or not at all, so this is the exact set the user sees outlined.
+ * Returns whether anything was ungrouped.
+ */
+export function ungroupSelection(): boolean {
+  const state = useDiagramStore.getState()
+  const doomed = selectedGroups(state, state.selectedIds)
+  if (doomed.length === 0) return false
+
+  const ids = new Set(doomed.map((group) => group.id))
+  const before = state.groupOrder
+    .map((id, index) => ({ id, index }))
+    .filter(({ id }) => ids.has(id))
+    .map(({ id, index }) => {
+      const group = state.groups[id]
+      if (!group) throw new Error(`no group ${id}`)
+      return { group: cloneGroup(group), index }
+    })
+
+  const selection = captureSelection(state)
+  history().run(
+    createRegroupCommand({
+      label: `Ungroup ${describeCount(before.length, 'group')}`,
+      before,
+      after: [],
+      selectionBefore: selection,
+      selectionAfter: selection,
+    }),
+  )
+  return true
 }

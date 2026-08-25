@@ -1,4 +1,4 @@
-import type { Block, Connection } from '../types'
+import type { Block, Connection, Group } from '../types'
 
 /**
  * Undo/redo, form (A): every command carries the data it needs to apply and
@@ -98,9 +98,9 @@ export function describeElements(blockCount: number, connectionCount: number): s
  * A command must never point at an object that still lives in the store: the
  * store replaces block objects wholesale on every patch, so a captured
  * reference either goes stale or — worse, if some later code mutates in place
- * — silently rewrites the history's idea of the past. `style` is copied too
- * even though nothing writes it before Phase 5, because that is exactly the
- * kind of field that quietly turns into a shared reference later.
+ * — silently rewrites the history's idea of the past. `style` is copied a
+ * level deeper for the same reason: Phase 5's panel patches it in place of the
+ * whole block, so a shared style object would be the exact leak this guards.
  */
 export function cloneBlock(block: Block): Block {
   return { ...block, ...(block.style ? { style: { ...block.style } } : {}) }
@@ -112,4 +112,13 @@ export function cloneConnection(connection: Connection): Connection {
     ...connection,
     ...(connection.style ? { style: { ...connection.style } } : {}),
   }
+}
+
+/**
+ * `cloneBlock` for groups. The member list is copied, not shared — a command
+ * that held the store's own array would watch its record of the past change
+ * every time a delete pruned a member out of it.
+ */
+export function cloneGroup(group: Group): Group {
+  return { ...group, blockIds: [...group.blockIds] }
 }

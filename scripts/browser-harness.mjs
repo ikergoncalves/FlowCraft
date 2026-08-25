@@ -157,6 +157,7 @@ export const MODIFIER = { alt: 1, ctrl: 2, meta: 4, shift: 8 }
  * handler keyed on physical layout would ignore.
  */
 const KEYS = {
+  a: { key: 'a', code: 'KeyA', vk: 65, text: 'a' },
   g: { key: 'g', code: 'KeyG', vk: 71, text: 'g' },
   r: { key: 'r', code: 'KeyR', vk: 82, text: 'r' },
   v: { key: 'v', code: 'KeyV', vk: 86, text: 'v' },
@@ -216,7 +217,7 @@ export class Page {
     await this.settle()
   }
 
-  mouse(type, { x, y, button = 'left', buttons = 0, modifiers = 0 }) {
+  mouse(type, { x, y, button = 'left', buttons = 0, modifiers = 0, clickCount }) {
     return this.session.send('Input.dispatchMouseEvent', {
       type,
       x,
@@ -224,7 +225,8 @@ export class Page {
       button,
       buttons,
       modifiers,
-      clickCount: type === 'mousePressed' || type === 'mouseReleased' ? 1 : 0,
+      clickCount:
+        clickCount ?? (type === 'mousePressed' || type === 'mouseReleased' ? 1 : 0),
       pointerType: 'mouse',
     })
   }
@@ -232,6 +234,21 @@ export class Page {
   async click(x, y, modifiers = 0) {
     await this.mouse('mousePressed', { x, y, buttons: 1, modifiers })
     await this.mouse('mouseReleased', { x, y, buttons: 0, modifiers })
+    await this.settle()
+  }
+
+  /**
+   * A real double-click.
+   *
+   * Chrome synthesises `dblclick` from the `clickCount` on the *second* press,
+   * so both presses have to be dispatched with the count Chrome expects — a
+   * pair of ordinary clicks produces no `dblclick` at all.
+   */
+  async doubleClick(x, y, modifiers = 0) {
+    await this.mouse('mousePressed', { x, y, buttons: 1, modifiers, clickCount: 1 })
+    await this.mouse('mouseReleased', { x, y, buttons: 0, modifiers, clickCount: 1 })
+    await this.mouse('mousePressed', { x, y, buttons: 1, modifiers, clickCount: 2 })
+    await this.mouse('mouseReleased', { x, y, buttons: 0, modifiers, clickCount: 2 })
     await this.settle()
   }
 

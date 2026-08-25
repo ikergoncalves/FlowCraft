@@ -47,6 +47,72 @@ const READ_CANVAS_BOX = `
   return { left: box.left, top: box.top, width: box.width, height: box.height }
 `
 
+/**
+ * The properties panel's shape, plus its box in client pixels.
+ *
+ * The box is the point: jsdom has no layout, so "the panel does not cover the
+ * canvas and does not fall off a narrow window" is a question only a real
+ * renderer can answer.
+ */
+const READ_PANEL = `
+  const panel = document.querySelector('[data-testid="properties-panel"]')
+  if (!panel) return null
+  const box = panel.getBoundingClientRect()
+  const view = document.documentElement
+  return {
+    blocks: !!panel.querySelector('[data-testid="block-properties"]'),
+    connections: !!panel.querySelector('[data-testid="connection-properties"]'),
+    mixed: panel.querySelectorAll('[data-testid="mixed-indicator"]').length,
+    swatches: panel.querySelectorAll('[data-testid="swatch"]').length,
+    left: box.left,
+    right: box.right,
+    top: box.top,
+    bottom: box.bottom,
+    width: box.width,
+    height: box.height,
+    insideViewport: box.right <= view.clientWidth + 0.5 && box.bottom <= view.clientHeight + 0.5,
+  }
+`
+
+/**
+ * What the browser actually paints for the first block — resolved through the
+ * cascade, which is the one thing `getComputedStyle` can tell us and no unit
+ * test can.
+ */
+const READ_BLOCK_PAINT = `
+  const shape = document.querySelector('.block__shape')
+  if (!shape) return null
+  const style = getComputedStyle(shape)
+  return {
+    fill: style.fill,
+    stroke: style.stroke,
+    hasInlineFill: shape.style.fill !== '',
+  }
+`
+
+const READ_ARROW_MARKERS = `
+  const markers = [...document.querySelectorAll('[data-testid="arrow-marker"]')]
+  const line = document.querySelector('.connection__line')
+  return {
+    count: markers.length,
+    ids: markers.map((node) => node.id),
+    markerEnd: line ? line.getAttribute('marker-end') : null,
+    lineStroke: line ? getComputedStyle(line).stroke : null,
+    arrowFill: markers
+      .map((node) => getComputedStyle(node.querySelector('path')).fill),
+  }
+`
+
+const READ_GROUP_CHROME = `
+  const outlines = [...document.querySelectorAll('[data-testid="group-bounds"]')]
+  return {
+    groupBoxes: outlines.length,
+    selectionBoxes: document.querySelectorAll('[data-testid="selection-bounds"]').length,
+    selected: document.querySelectorAll('[data-testid="block-selection"]').length,
+    stroke: outlines[0] ? getComputedStyle(outlines[0]).stroke : null,
+  }
+`
+
 async function main() {
   const check = createChecklist()
 
@@ -212,6 +278,279 @@ async function main() {
       escapeLabel.undo?.label !== 'Undo: Move block',
       `undo still offers "${escapeLabel.undo?.label}"`,
     )
+
+    /*
+     * Phase 5 — styling and grouping.
+     *
+     * A clean slate first: whatever the checks above left behind would make the
+     * counting assertions below depend on their order.
+     */
+    console.log('\nProperties panel')
+    await page.press('a', MODIFIER.ctrl)
+    await page.press('Delete')
+    check.equal('the canvas is empty again', (await blocks()).length, 0)
+    check.equal('and the panel is gone with it', await page.evaluate(READ_PANEL), null)
+
+    await page.press('r')
+    await page.click(canvas.left + 220, canvas.top + 200)
+    await page.press('r')
+    await page.click(canvas.left + 560, canvas.top + 200)
+    current = await blocks()
+    check.equal('two fresh blocks', current.length, 2)
+    const one = { ...current[0] }
+    const two = { ...current[1] }
+
+    await page.click(centerOf(one).x, centerOf(one).y)
+    let panel = await page.evaluate(READ_PANEL)
+    check.ok('selecting a block reveals the panel', panel, 'no panel rendered')
+    check.equal('it shows the block section', panel?.blocks, true)
+    check.equal('and no connection section', panel?.connections, false)
+    check.ok(
+      'it renders its palette',
+      panel?.swatches >= 8,
+      `${panel?.swatches} swatches`,
+    )
+
+    // Layout facts jsdom cannot produce: the panel has a real box, it is fully
+    // on screen, and it leaves most of the canvas uncovered.
+    check.ok('the panel has a real box', panel?.width > 0 && panel?.height > 0)
+    check.equal('it sits inside the viewport', panel?.insideViewport, true)
+    check.ok(
+      'it leaves the canvas mostly clear',
+      panel?.width < canvas.width * 0.4,
+      `panel is ${panel?.width}px of a ${canvas.width}px canvas`,
+    )
+
+    console.log('\nStyling a block for real')
+    const paintBefore = await page.evaluate(READ_BLOCK_PAINT)
+    check.equal(
+      'an unstyled block sets no inline fill',
+      paintBefore?.hasInlineFill,
+      false,
+    )
+    check.ok(
+      'and still paints from the stylesheet',
+      paintBefore?.fill && paintBefore.fill !== 'none',
+      `computed fill was "${paintBefore?.fill}"`,
+    )
+
+    const swatchBox = await page.evaluate(`
+      const node = document.querySelector('[data-swatch="#e2683c"]')
+      if (!node) return null
+      const box = node.getBoundingClientRect()
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+    `)
+    check.ok('the palette offers the orange swatch', swatchBox, 'no swatch found')
+
+    if (swatchBox) {
+      await page.click(swatchBox.x, swatchBox.y)
+      const painted = await page.evaluate(READ_BLOCK_PAINT)
+      // The real cascade, not an attribute read: this is the only place that
+      // can prove the attribute actually beat the class.
+      check.equal('the block really paints orange', painted?.fill, 'rgb(226, 104, 60)')
+      check.equal('the inline fill is now set', painted?.hasInlineFill, true)
+
+      const styled = await page.evaluate(READ_HISTORY_BUTTONS)
+      check.equal('the edit is one entry', styled.undo?.label, 'Undo: Set fill')
+
+      await page.press('z', MODIFIER.ctrl)
+      const reverted = await page.evaluate(READ_BLOCK_PAINT)
+      check.equal('undo takes the inline fill away again', reverted?.hasInlineFill, false)
+      check.equal(
+        'and the stylesheet colour comes back',
+        reverted?.fill,
+        paintBefore?.fill,
+      )
+      await page.press('y', MODIFIER.ctrl)
+    }
+
+    console.log('\nMixed values across a selection')
+    // The second block was never styled, so with the first one orange the two
+    // genuinely disagree.
+    await page.click(centerOf(two).x, centerOf(two).y)
+    panel = await page.evaluate(READ_PANEL)
+    check.equal('one block on its own reports no mixed value', panel?.mixed, 0)
+
+    await page.press('a', MODIFIER.ctrl)
+    panel = await page.evaluate(READ_PANEL)
+    check.ok(
+      'two differently filled blocks report a mixed value',
+      panel?.mixed > 0,
+      'no mixed indicator rendered',
+    )
+
+    console.log('\nColoured arrows and their markers')
+    await page.press('a', MODIFIER.ctrl)
+    await page.press('Delete')
+    await page.press('r')
+    await page.click(canvas.left + 220, canvas.top + 200)
+    await page.press('r')
+    await page.click(canvas.left + 620, canvas.top + 200)
+    current = await blocks()
+    const wireFrom = current[0]
+    const wireTo = current[1]
+
+    await page.mouse('mouseMoved', centerOf(wireFrom))
+    await page.settle()
+    const eastPort = await page.evaluate(`
+      const node = document.querySelector('[data-port-side="e"][data-port-block="${wireFrom.id}"] circle')
+      if (!node) return null
+      return { x: Number(node.getAttribute('cx')), y: Number(node.getAttribute('cy')) }
+    `)
+
+    if (eastPort) {
+      await page.drag(screen(eastPort.x, eastPort.y), centerOf(wireTo), { steps: 16 })
+      check.equal('an arrow was drawn', (await connections()).length, 1)
+
+      const before = await page.evaluate(READ_ARROW_MARKERS)
+      check.equal('an unstyled diagram defines one marker', before?.count, 1)
+
+      // Select the arrow by clicking its midpoint, then colour it.
+      const mid = await page.evaluate(`
+        const box = document.querySelector('.connection__hit').getBoundingClientRect()
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+      `)
+      await page.click(mid.x, mid.y)
+      panel = await page.evaluate(READ_PANEL)
+      check.equal(
+        'the panel switches to the connection section',
+        panel?.connections,
+        true,
+      )
+      check.equal('and drops the block section', panel?.blocks, false)
+
+      const lineSwatch = await page.evaluate(`
+        const field = [...document.querySelectorAll('[data-testid="swatch"]')]
+          .find((node) => node.getAttribute('aria-label') === 'Line: #e2683c')
+        if (!field) return null
+        const box = field.getBoundingClientRect()
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+      `)
+      check.ok('the connection section offers a line colour', lineSwatch, 'no swatch')
+
+      if (lineSwatch) {
+        await page.click(lineSwatch.x, lineSwatch.y)
+        const after = await page.evaluate(READ_ARROW_MARKERS)
+
+        check.equal(
+          'the line really paints orange',
+          after?.lineStroke,
+          'rgb(226, 104, 60)',
+        )
+        check.equal(
+          'the arrow points at the marker for its colour',
+          after?.markerEnd,
+          'url(#flowcraft-arrow-e2683c)',
+        )
+        // The anti-explosion property, measured in the DOM: default + one
+        // derived marker, not one marker per connection.
+        check.equal('one marker per colour, plus the default', after?.count, 2)
+        check.ok(
+          'the arrowhead is painted the same orange',
+          after?.arrowFill.includes('rgb(226, 104, 60)'),
+          `arrow fills were ${JSON.stringify(after?.arrowFill)}`,
+        )
+
+        await page.press('z', MODIFIER.ctrl)
+        const undone = await page.evaluate(READ_ARROW_MARKERS)
+        check.equal('undo drops the derived marker again', undone?.count, 1)
+      }
+    }
+
+    console.log('\nGrouping')
+    await page.press('a', MODIFIER.ctrl)
+    await page.press('Delete')
+    await page.press('r')
+    await page.click(canvas.left + 200, canvas.top + 200)
+    await page.press('r')
+    await page.click(canvas.left + 200, canvas.top + 420)
+    await page.press('r')
+    await page.click(canvas.left + 700, canvas.top + 200)
+    current = await blocks()
+    check.equal('three blocks to group', current.length, 3)
+    const [first, second, third] = current
+
+    await page.click(centerOf(first).x, centerOf(first).y)
+    await page.click(centerOf(second).x, centerOf(second).y, MODIFIER.shift)
+    await page.press('g', MODIFIER.ctrl)
+
+    let chrome = await page.evaluate(READ_GROUP_CHROME)
+    check.equal('a group outline appears', chrome?.groupBoxes, 1)
+    check.equal('and replaces the plain multi-selection box', chrome?.selectionBoxes, 0)
+    check.ok(
+      'the outline is painted a colour of its own',
+      chrome?.stroke && chrome.stroke !== 'none',
+      `computed stroke was "${chrome?.stroke}"`,
+    )
+
+    const grouped = await page.evaluate(READ_HISTORY_BUTTONS)
+    check.equal('grouping is one entry', grouped.undo?.label, 'Undo: Group 2 blocks')
+
+    // Click away, then click one member: the whole group must come back.
+    await page.click(centerOf(third).x, centerOf(third).y)
+    chrome = await page.evaluate(READ_GROUP_CHROME)
+    check.equal('clicking outside the group deselects it', chrome?.selected, 1)
+
+    await page.click(centerOf(first).x, centerOf(first).y)
+    chrome = await page.evaluate(READ_GROUP_CHROME)
+    check.equal('clicking one member selects both', chrome?.selected, 2)
+    check.equal('and the group outline is back', chrome?.groupBoxes, 1)
+
+    console.log('\nMoving a group')
+    const groupBefore = (await blocks()).filter(
+      (block) => block.id === first.id || block.id === second.id,
+    )
+    await page.drag(centerOf(first), {
+      x: centerOf(first).x + 130,
+      y: centerOf(first).y + 70,
+    })
+    const groupAfter = await blocks()
+    for (const original of groupBefore) {
+      const moved = groupAfter.find((block) => block.id === original.id)
+      check.close(
+        `${original.id} moved with the group in x`,
+        moved.x,
+        original.x + 130,
+        0.01,
+      )
+      check.close(
+        `${original.id} moved with the group in y`,
+        moved.y,
+        original.y + 70,
+        0.01,
+      )
+    }
+    const unmoved = groupAfter.find((block) => block.id === third.id)
+    check.close('the block outside the group stayed put', unmoved.x, third.x, 0.01)
+
+    // Re-read every position: the group has just moved, and the coordinates
+    // captured before the drag now point at empty canvas.
+    const placed = (id) => {
+      const block = groupAfter.find((entry) => entry.id === id)
+      return centerOf(block)
+    }
+
+    console.log('\nStepping into a group')
+    await page.doubleClick(placed(first.id).x, placed(first.id).y)
+    chrome = await page.evaluate(READ_GROUP_CHROME)
+    check.equal('double-click singles out one member', chrome?.selected, 1)
+    check.equal('and the group outline goes', chrome?.groupBoxes, 0)
+
+    console.log('\nDeleting and ungrouping')
+    await page.click(placed(third.id).x, placed(third.id).y)
+    await page.click(placed(first.id).x, placed(first.id).y)
+    await page.press('Delete')
+    check.equal('deleting a group takes both members', (await blocks()).length, 1)
+    await page.press('z', MODIFIER.ctrl)
+    check.equal('undo brings them back', (await blocks()).length, 3)
+    chrome = await page.evaluate(READ_GROUP_CHROME)
+    check.equal('and the group with them', chrome?.groupBoxes, 1)
+
+    await page.press('g', MODIFIER.ctrl | MODIFIER.shift)
+    chrome = await page.evaluate(READ_GROUP_CHROME)
+    check.equal('ctrl+shift+g dissolves the group', chrome?.groupBoxes, 0)
+    check.equal('leaving an ordinary multi-selection', chrome?.selectionBoxes, 1)
+    check.equal('with both blocks still there', (await blocks()).length, 3)
   })
 
   const { passed, failures } = check.summary()

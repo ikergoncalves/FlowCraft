@@ -32,14 +32,25 @@ export interface Viewport extends Point {
 export type BlockType = 'rect' | 'text'
 
 /**
- * Per-block visual overrides. Every field is optional and nothing reads them
- * yet: Phase 5 (styling) fills this in without reshaping `Block`.
+ * Per-block visual overrides.
+ *
+ * Every field stays optional, and that is load-bearing rather than tidy: an
+ * absent field means "whatever the stylesheet says", so a block with no
+ * `style` at all renders through the CSS classes exactly as it did before
+ * Phase 5 — and Phase 6's themes can still repaint it. A resolved default
+ * table lives in `utils/style.ts` for the properties panel to *display*;
+ * nothing writes those values into the document.
  */
 export interface BlockStyle {
   fill?: string
   stroke?: string
   strokeWidth?: number
   fontSize?: number
+  /**
+   * The label colour, kept apart from `fill` — which is the box's. Naming
+   * them both "colour" is how a panel ends up repainting the wrong thing.
+   */
+  textColor?: string
 }
 
 /** A diagram node. `x`/`y`/`width`/`height` are world space, never pixels. */
@@ -59,8 +70,12 @@ export type AnchorSide = 'n' | 'e' | 's' | 'w'
 export const ANCHOR_SIDES: readonly AnchorSide[] = ['n', 'e', 's', 'w']
 
 /**
- * Per-connection visual overrides. Empty of meaning until Phase 5, exactly
- * like `BlockStyle`.
+ * Per-connection visual overrides, optional on the same terms as `BlockStyle`.
+ *
+ * `dashed` is a flag rather than a `strokeDasharray` string: the dash pattern
+ * has to stay legible at every zoom and against `vector-effect`, which is a
+ * rendering decision, not a document one. Storing the answer instead of the
+ * question would freeze one pattern into every saved diagram.
  */
 export interface ConnectionStyle {
   stroke?: string
@@ -85,4 +100,29 @@ export interface Connection {
   sourceAnchor?: AnchorSide
   targetAnchor?: AnchorSide
   style?: ConnectionStyle
+}
+
+/**
+ * A rigid set of blocks that moves, copies and deletes as one element.
+ *
+ * **Flat, deliberately.** There is no `groupIds` field, so a group containing
+ * a group is not merely unsupported — it is unrepresentable. Nesting would
+ * bring recursive traversal, cycle detection and a partial-ungroup question
+ * with no obvious right answer, and half of that is worse than none of it.
+ * Grouping a selection that already spans a group therefore *absorbs* it: the
+ * members come across and the old group dissolves, which flattens rather than
+ * nests and needs no new concept to explain.
+ *
+ * Membership is the group's, not the block's. A `Block.groupId` would be the
+ * same fact stored twice, and the two copies would disagree the first time a
+ * delete pruned one and not the other.
+ */
+export interface Group {
+  id: string
+  /**
+   * Members, in paint order. A block belongs to at most one group and a group
+   * holds at least two blocks; both are enforced by the store and asserted as
+   * document invariants.
+   */
+  blockIds: string[]
 }

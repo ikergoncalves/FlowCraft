@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import type { Block, Connection } from '../types'
 import { pathFromPoints, resolveAnchors, routeConnection } from '../utils/routing'
-import { connectionLineAttributes } from '../utils/style'
+import { connectionLineStyle } from '../utils/style'
 import { CONNECTION_CORNER_RADIUS, markerIdForStroke } from './connectionStyle'
 
 /**
@@ -60,6 +60,23 @@ function ConnectionViewImpl({
         strokeWidth={HIT_WIDTH_PX / zoom}
         pointerEvents="stroke"
       />
+      {/*
+        Selection is a halo *under* the line rather than a recolouring of it.
+        Repainting the line accent-blue used to be fine, but a coloured arrow
+        cannot be recoloured to show selection without either losing the colour
+        the user chose or leaving its arrowhead — which is keyed on that colour
+        — a different shade from its own line. A halo works at any colour.
+      */}
+      {selected && (
+        <path
+          className="connection__halo"
+          data-testid="connection-halo"
+          d={d}
+          fill="none"
+          vectorEffect="non-scaling-stroke"
+          pointerEvents="none"
+        />
+      )}
       <path
         className="connection__line"
         data-testid="connection-line"
@@ -68,7 +85,7 @@ function ConnectionViewImpl({
         vectorEffect="non-scaling-stroke"
         // Sparse: an unstyled arrow sets nothing and keeps the stylesheet's
         // colour, width and (absent) dash pattern.
-        {...connectionLineAttributes(connection.style)}
+        style={connectionLineStyle(connection.style)}
         markerEnd={`url(#${markerIdForStroke(connection.style?.stroke)})`}
         pointerEvents="none"
       />

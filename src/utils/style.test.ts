@@ -4,10 +4,10 @@ import {
   DEFAULT_BLOCK_STYLE,
   DEFAULT_CONNECTION_STYLE,
   MIXED,
-  blockShapeAttributes,
-  blockTextAttributes,
+  blockShapeStyle,
+  blockTextStyle,
   connectionDashArray,
-  connectionLineAttributes,
+  connectionLineStyle,
   isMixed,
   resolveBlockStyle,
   resolveConnectionStyle,
@@ -133,24 +133,24 @@ describe('sharedConnectionField', () => {
   })
 })
 
-describe('blockShapeAttributes', () => {
+describe('blockShapeStyle', () => {
   it('emits nothing at all for an unstyled block', () => {
     // The whole point: no attributes means the stylesheet is still in charge,
     // which is what keeps Phase 6's themes able to repaint an unstyled block.
-    expect(blockShapeAttributes()).toEqual({})
-    expect(blockShapeAttributes({})).toEqual({})
+    expect(blockShapeStyle()).toEqual({})
+    expect(blockShapeStyle({})).toEqual({})
   })
 
   it('emits only the fields that are set', () => {
-    expect(blockShapeAttributes({ fill: '#ff0000' })).toEqual({ fill: '#ff0000' })
+    expect(blockShapeStyle({ fill: '#ff0000' })).toEqual({ fill: '#ff0000' })
   })
 
   it('never emits the text fields onto the shape', () => {
-    expect(blockShapeAttributes({ textColor: '#ff0000', fontSize: 30 })).toEqual({})
+    expect(blockShapeStyle({ textColor: '#ff0000', fontSize: 30 })).toEqual({})
   })
 
   it('puts the text fields on the label instead', () => {
-    expect(blockTextAttributes({ textColor: '#ff0000', fontSize: 30 })).toEqual({
+    expect(blockTextStyle({ textColor: '#ff0000', fontSize: 30 })).toEqual({
       fill: '#ff0000',
       fontSize: 30,
     })
@@ -173,14 +173,14 @@ describe('connectionDashArray', () => {
   })
 })
 
-describe('connectionLineAttributes', () => {
+describe('connectionLineStyle', () => {
   it('emits nothing for an unstyled connection', () => {
-    expect(connectionLineAttributes()).toEqual({})
+    expect(connectionLineStyle()).toEqual({})
   })
 
   it('emits the dash array only when dashed', () => {
-    expect(connectionLineAttributes({ stroke: '#ff0000' })).toEqual({ stroke: '#ff0000' })
-    expect(connectionLineAttributes({ dashed: true, strokeWidth: 1 })).toEqual({
+    expect(connectionLineStyle({ stroke: '#ff0000' })).toEqual({ stroke: '#ff0000' })
+    expect(connectionLineStyle({ dashed: true, strokeWidth: 1 })).toEqual({
       strokeWidth: 1,
       strokeDasharray: '3 2',
     })

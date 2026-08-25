@@ -40,9 +40,12 @@ function ArrowMarker({ id, zoom, stroke }: ArrowMarkerProps) {
     >
       <path
         className="connection__arrow"
-        // Only an explicit colour overrides the class; without one the
-        // stylesheet keeps control, which is what Phase 6's themes need.
-        {...(stroke === undefined ? {} : { fill: stroke })}
+        // Inline style, and for the same reason the block's fill is: a `fill`
+        // *attribute* sits below every author rule in the SVG cascade, so
+        // `.connection__arrow` would win and every arrowhead would come out
+        // the default grey however the line was coloured. Without an explicit
+        // colour nothing is set at all and the stylesheet keeps control.
+        style={stroke === undefined ? undefined : { fill: stroke }}
         d={`M 0 0 L ${ARROW_LENGTH_PX} ${ARROW_WIDTH_PX / 2} L 0 ${ARROW_WIDTH_PX} z`}
       />
     </marker>

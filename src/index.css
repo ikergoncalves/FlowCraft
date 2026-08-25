@@ -181,16 +181,22 @@ body,
   fill: var(--connection);
 }
 
-.connection--selected .connection__line {
+/* Selection is a halo drawn under the arrow rather than a recolouring of it:
+ * a user-chosen colour has to survive being selected, and the arrowhead marker
+ * is keyed on that colour, so recolouring only the line would leave the two
+ * mismatched. Works at any line colour, dashed or solid. */
+.connection__halo {
   stroke: var(--connection-selected);
-  stroke-width: 2.5;
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.4;
 }
 
-/* The arrowhead follows its line's colour but not its selected state. Markers
- * cannot inherit from the path that references them — `context-stroke` is not
- * portable — so `ConnectionDefs` defines one marker per colour in use and the
- * line points at the matching id. Keying on selection as well would double the
- * marker count for something the thicker, brighter line already carries. */
+/* Markers cannot inherit from the path that references them — `context-stroke`
+ * is not portable — so `ConnectionDefs` defines one marker per colour in use
+ * and each line points at the id for its own colour. That is what keeps the
+ * `<defs>` growing with the palette rather than with the diagram. */
 
 .connection__hit {
   cursor: pointer;

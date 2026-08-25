@@ -112,13 +112,22 @@ export function sharedConnectionField<K extends keyof ConnectionStyle>(
 }
 
 /**
- * The SVG props a block's shape needs — and only the ones it actually sets.
+ * The inline style a block's shape needs — and only the fields it actually
+ * sets.
  *
- * Sparse on purpose: an absent key leaves the CSS class in charge. `fill` and
- * `stroke` are plain attributes rather than inline `style`, so the stylesheet
- * keeps `vector-effect` and the selected/hover rules it owns.
+ * **Inline style, not presentation attributes.** The first attempt used
+ * attributes and the browser harness caught it immediately: in SVG a
+ * presentation attribute sits at the *bottom* of the cascade, below every
+ * author rule, so `fill="#e2683c"` lost to `.block__shape { fill: … }` and a
+ * block the user had painted orange rendered in the default slate. The
+ * attribute was there, the DOM assertions were green, and only
+ * `getComputedStyle` in a real renderer disagreed.
+ *
+ * Inline style wins that fight while staying per-property, so an unset field
+ * still falls through to the class — which is what keeps Phase 6's themes able
+ * to repaint an unstyled block, and leaves `vector-effect` where it belongs.
  */
-export function blockShapeAttributes(style?: BlockStyle): {
+export function blockShapeStyle(style?: BlockStyle): {
   fill?: string
   stroke?: string
   strokeWidth?: number
@@ -131,8 +140,14 @@ export function blockShapeAttributes(style?: BlockStyle): {
   })
 }
 
-/** The same, for a block's label. */
-export function blockTextAttributes(style?: BlockStyle): {
+/**
+ * The same, for a block's label.
+ *
+ * `fontSize` is a bare number, which React renders as `px` — and inside an SVG
+ * one CSS pixel is one user unit, so the size stays in world space and scales
+ * with the zoom exactly as the base `font-size` attribute does.
+ */
+export function blockTextStyle(style?: BlockStyle): {
   fill?: string
   fontSize?: number
 } {
@@ -152,8 +167,8 @@ export function connectionDashArray(style?: ConnectionStyle): string | undefined
   return `${width * 3} ${width * 2}`
 }
 
-/** The sparse SVG props for an arrow's visible line. */
-export function connectionLineAttributes(style?: ConnectionStyle): {
+/** The sparse inline style for an arrow's visible line. */
+export function connectionLineStyle(style?: ConnectionStyle): {
   stroke?: string
   strokeWidth?: number
   strokeDasharray?: string

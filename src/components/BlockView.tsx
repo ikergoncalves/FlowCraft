@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import type { Block } from '../types'
-import { blockShapeAttributes, blockTextAttributes } from '../utils/style'
+import { blockShapeStyle, blockTextStyle } from '../utils/style'
 
 /**
  * World-unit font size when a block does not override it.
@@ -52,9 +52,11 @@ function BlockViewImpl({ block, selected, onActivate }: BlockViewProps) {
           width={block.width}
           height={block.height}
           rx={4}
-          // Sparse attributes: a block with no style sets none of them and
-          // renders entirely off `.block__shape`, exactly as before Phase 5.
-          {...blockShapeAttributes(block.style)}
+          // Sparse inline style: a block with no style sets no property at
+          // all and renders entirely off `.block__shape`, exactly as before
+          // Phase 5. Inline rather than presentation attributes because an
+          // attribute loses to the class — see `blockShapeStyle`.
+          style={blockShapeStyle(block.style)}
         />
       ) : (
         // Invisible hit area so a bare text block is still easy to grab.
@@ -75,7 +77,7 @@ function BlockViewImpl({ block, selected, onActivate }: BlockViewProps) {
         fontSize={FONT_SIZE}
         textAnchor="middle"
         dominantBaseline="central"
-        {...blockTextAttributes(block.style)}
+        style={blockTextStyle(block.style)}
       >
         {block.text}
       </text>

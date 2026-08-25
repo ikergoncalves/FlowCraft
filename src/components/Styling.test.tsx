@@ -456,24 +456,59 @@ describe('dragging the colour picker', () => {
 })
 
 describe('what a styled element renders', () => {
-  it('sets no colour attributes at all on an unstyled block', () => {
+  it('sets no colour at all on an unstyled block', () => {
     // The rule that keeps Phase 6's themes able to repaint it.
     seed(1)
     render(<App />)
-    const shape = required(getCanvas().querySelector('.block__shape'), 'block shape')
+    const shape = required(
+      getCanvas().querySelector<SVGRectElement>('.block__shape'),
+      'block shape',
+    )
 
-    expect(shape.hasAttribute('fill')).toBe(false)
-    expect(shape.hasAttribute('stroke')).toBe(false)
+    expect(shape.style.fill).toBe('')
+    expect(shape.style.stroke).toBe('')
   })
 
-  it('sets the attribute once a fill is chosen', () => {
+  it('sets an inline fill once one is chosen', () => {
+    // Inline, not a presentation attribute: an attribute sits below every
+    // author rule in the SVG cascade, so `.block__shape` would win and the
+    // block would render in the default colour with the attribute set.
     const [a] = seed(1)
     render(<App />)
     select(required(a, 'a').id)
     fireEvent.click(swatch('Fill', '#4c8dff'))
 
-    const shape = required(getCanvas().querySelector('.block__shape'), 'block shape')
-    expect(shape.getAttribute('fill')).toBe('#4c8dff')
+    const shape = required(
+      getCanvas().querySelector<SVGRectElement>('.block__shape'),
+      'block shape',
+    )
+    expect(shape.style.fill).toBe('rgb(76, 141, 255)')
+    expect(shape.hasAttribute('fill')).toBe(false)
+  })
+
+  it('draws a halo under a selected arrow instead of recolouring it', () => {
+    const [a, b] = seed(2)
+    act(() => {
+      store().addConnection({
+        id: 'ab',
+        sourceId: required(a, 'a').id,
+        targetId: required(b, 'b').id,
+        style: { stroke: '#e2683c' },
+      })
+    })
+    render(<App />)
+    act(() => {
+      store().selectConnections('ab')
+    })
+
+    const line = required(
+      getCanvas().querySelector<SVGPathElement>('.connection__line'),
+      'line',
+    )
+    expect(getCanvas().querySelector('[data-testid="connection-halo"]')).not.toBeNull()
+    // The chosen colour survives being selected, so the line and its
+    // colour-keyed arrowhead cannot drift apart.
+    expect(line.style.stroke).toBe('rgb(226, 104, 60)')
   })
 
   it('points a coloured arrow at the marker for its colour', () => {

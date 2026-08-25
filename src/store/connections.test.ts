@@ -209,19 +209,19 @@ describe('removeBlocks cascade', () => {
     const removed = store().removeBlocks([a.id])
 
     // Whole objects, not ids: undo has to restore the anchors verbatim.
-    expect(removed).toEqual([connection])
+    expect(removed.connections).toEqual([connection])
   })
 
   it('returns an empty list when nothing was connected', () => {
     const { a } = twoBlocks()
 
-    expect(store().removeBlocks([a.id])).toEqual([])
+    expect(store().removeBlocks([a.id]).connections).toEqual([])
   })
 
   it('returns an empty list when no id was a block', () => {
     twoBlocks()
 
-    expect(store().removeBlocks(['ghost'])).toEqual([])
+    expect(store().removeBlocks(['ghost']).connections).toEqual([])
   })
 
   it('reports a connection between two removed blocks exactly once', () => {
@@ -230,7 +230,7 @@ describe('removeBlocks cascade', () => {
 
     const removed = store().removeBlocks([a.id, b.id])
 
-    expect(removed.map((entry) => entry.id)).toEqual([idOf(connection)])
+    expect(removed.connections.map((entry) => entry.id)).toEqual([idOf(connection)])
   })
 
   it('drops cascaded connections from the connection selection', () => {
@@ -257,7 +257,7 @@ describe('removeBlocks cascade', () => {
     const { a, b } = twoBlocks()
     const connection = store().addConnection({ sourceId: a.id, targetId: b.id })
 
-    expect(store().removeBlock(a.id)).toEqual([connection])
+    expect(store().removeBlock(a.id).connections).toEqual([connection])
   })
 })
 

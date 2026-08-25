@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { Block, Connection, Point, Tool, Viewport } from '../types'
+import type { Block, Connection, Group, Point, Tool, Viewport } from '../types'
 import { DEFAULT_VIEWPORT } from '../utils/coords'
+import { MIN_GROUP_SIZE, pruneGroups } from '../utils/groups'
 import { createId } from '../utils/id'
 
 /**
@@ -14,6 +15,11 @@ export type BlockPatch = Partial<Omit<Block, 'id'>>
 
 /** A connection without its id, on the same terms as `BlockInit`. */
 export type ConnectionInit = Omit<Connection, 'id'> & { id?: string }
+
+export type ConnectionPatch = Partial<Omit<Connection, 'id'>>
+
+/** A group without its id, on the same terms as `BlockInit`. */
+export type GroupInit = Omit<Group, 'id'> & { id?: string }
 
 /**
  * A block together with the slot it occupied in `blockOrder`.
@@ -33,6 +39,26 @@ export interface BlockPlacement {
 export interface ConnectionPlacement {
   connection: Connection
   index: number
+}
+
+/** The group counterpart, and the third user of `spliceInOrder`. */
+export interface GroupPlacement {
+  group: Group
+  index: number
+}
+
+/** Everything `removeBlocks` destroyed on the way, for undo to put back. */
+export interface RemovedElements {
+  /** Connections that had an endpoint among the removed blocks. */
+  connections: Connection[]
+  /**
+   * Groups that lost a member — dissolved *or* merely shrunk — as they were
+   * before the removal. Phase 5 widened this return value from a bare
+   * `Connection[]`: the cascade is no longer only about arrows, and a caller
+   * that got the arrows but not the memberships would restore a diagram whose
+   * blocks had quietly forgotten they belonged together.
+   */
+  groups: Group[]
 }
 
 /**
@@ -84,6 +110,18 @@ export interface DiagramState {
   /** Connections, in the same map + order-list shape as blocks. */
   connections: Record<string, Connection>
   connectionOrder: string[]
+  /**
+   * Groups, in the same map + order-list shape again.
+   *
+   * There is deliberately no `selectedGroupIds` beside the two selection lists
+   * below. Selecting a group *is* selecting its member blocks — clicking a
+   * member widens the selection to the whole group — so a group's selection
+   * state is derivable, and `utils/groups.ts` derives it. Storing it as well
+   * would give move, delete, marquee and the bounding box a second source of
+   * truth to disagree with.
+   */
+  groups: Record<string, Group>
+  groupOrder: string[]
   viewport: Viewport
   selectedIds: string[]
   /**
@@ -106,14 +144,19 @@ export interface DiagramState {
   addBlock: (init: BlockInit) => Block
   insertBlocks: (placements: readonly BlockPlacement[]) => void
   insertConnections: (placements: readonly ConnectionPlacement[]) => void
+  insertGroups: (placements: readonly GroupPlacement[]) => void
   updateBlock: (id: string, patch: BlockPatch) => void
   updateBlocks: (patches: Record<string, BlockPatch>) => void
+  updateConnection: (id: string, patch: ConnectionPatch) => void
+  updateConnections: (patches: Record<string, ConnectionPatch>) => void
   setBlockPositions: (positions: Record<string, Point>) => void
-  removeBlock: (id: string) => Connection[]
-  removeBlocks: (ids: readonly string[]) => Connection[]
+  removeBlock: (id: string) => RemovedElements
+  removeBlocks: (ids: readonly string[]) => RemovedElements
   addConnection: (init: ConnectionInit) => Connection | null
   removeConnection: (id: string) => void
   removeConnections: (ids: readonly string[]) => void
+  addGroup: (init: GroupInit) => Group | null
+  removeGroups: (ids: readonly string[]) => void
   setViewport: (viewport: Viewport) => void
   select: (ids: string | readonly string[]) => void
   addToSelection: (ids: string | readonly string[]) => void
@@ -142,6 +185,8 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
   blockOrder: [],
   connections: {},
   connectionOrder: [],
+  groups: {},
+  groupOrder: [],
   viewport: DEFAULT_VIEWPORT,
   selectedIds: [],
   selectedConnectionIds: [],
@@ -210,6 +255,36 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
       }
     }),
 
+  /**
+   * Restores groups, overwriting membership rather than skipping ids it
+   * already holds.
+   *
+   * The one restore primitive that is *absolute* instead of insert-if-missing,
+   * and it has to be. Deleting one member of a three-block group leaves the
+   * group alive with two, so undo has a group to put a member back into, not a
+   * group to re-create. An insert-if-missing here would silently do nothing in
+   * exactly that case. Absolute is still idempotent, which is all the history
+   * actually requires.
+   */
+  insertGroups: (placements) =>
+    set((state) => {
+      if (placements.length === 0) return state
+
+      const groups = { ...state.groups }
+      for (const { group } of placements) {
+        groups[group.id] = { ...group, blockIds: [...group.blockIds] }
+      }
+
+      const missing = placements.filter(({ group }) => !(group.id in state.groups))
+      return {
+        groups,
+        groupOrder: spliceInOrder(
+          state.groupOrder,
+          missing.map(({ group, index }) => ({ id: group.id, index })),
+        ),
+      }
+    }),
+
   updateBlock: (id, patch) =>
     set((state) => {
       const current = state.blocks[id]
@@ -235,6 +310,32 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
       }
 
       return changed ? { blocks } : state
+    }),
+
+  updateConnection: (id, patch) => {
+    get().updateConnections({ [id]: patch })
+  },
+
+  /**
+   * `updateBlocks` for arrows.
+   *
+   * Added in Phase 5 because styling a mixed selection has to patch both kinds
+   * in one command, and until now nothing had ever edited a connection after
+   * creating it — anchors were set once and geometry was never stored at all.
+   */
+  updateConnections: (patches) =>
+    set((state) => {
+      const connections = { ...state.connections }
+      let changed = false
+
+      for (const [id, patch] of Object.entries(patches)) {
+        const current = connections[id]
+        if (!current) continue
+        connections[id] = { ...current, ...patch }
+        changed = true
+      }
+
+      return changed ? { connections } : state
     }),
 
   /**
@@ -263,12 +364,16 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
    * knowledge with the single `set` that destroyed them, so the command can
    * capture it without a second read that might race a concurrent action.
    * They come back as whole `Connection` objects rather than ids because undo
-   * must restore each one's anchors and style verbatim.
+   * must restore each one's anchors and style verbatim. Phase 5 extended the
+   * same reasoning to groups: removing a member prunes it out of its group and
+   * dissolves a group left below `MIN_GROUP_SIZE`, and neither fact can be
+   * recomputed once the blocks are gone.
    */
   removeBlocks: (ids) => {
     const doomed = new Set(ids)
     const state = get()
-    if (![...doomed].some((id) => id in state.blocks)) return []
+    if (![...doomed].some((id) => id in state.blocks))
+      return { connections: [], groups: [] }
 
     const orphaned = state.connectionOrder
       .map((id) => state.connections[id])
@@ -278,6 +383,7 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
           (doomed.has(connection.sourceId) || doomed.has(connection.targetId)),
       )
     const orphanedIds = new Set(orphaned.map((connection) => connection.id))
+    const pruned = pruneGroups(state, doomed)
 
     set((current) => {
       const blocks: Record<string, Block> = {}
@@ -299,6 +405,8 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
         blockOrder: current.blockOrder.filter((id) => !doomed.has(id)),
         connections,
         connectionOrder: current.connectionOrder.filter((id) => !orphanedIds.has(id)),
+        groups: pruned.groups,
+        groupOrder: pruned.groupOrder,
         selectedIds: current.selectedIds.filter((id) => !doomed.has(id)),
         selectedConnectionIds: current.selectedConnectionIds.filter(
           (id) => !orphanedIds.has(id),
@@ -306,7 +414,7 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
       }
     })
 
-    return orphaned
+    return { connections: orphaned, groups: pruned.affected }
   },
 
   /**
@@ -362,6 +470,66 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
         selectedConnectionIds: state.selectedConnectionIds.filter(
           (id) => !doomed.has(id),
         ),
+      }
+    }),
+
+  /**
+   * Groups blocks, or returns `null` if the diagram refuses.
+   *
+   * Refused when fewer than `MIN_GROUP_SIZE` of the ids name a live block — a
+   * group of one is indistinguishable from the block itself.
+   *
+   * Members already in another group are *absorbed*: they leave the old group,
+   * which dissolves if that drops it below the minimum. This is the flat
+   * alternative to nesting. Rejecting the attempt outright was the other
+   * option, but it makes a perfectly ordinary action ("group these two things,
+   * one of which happens to be a pair") fail for a reason the user cannot see,
+   * and clicking a member already selects its whole group, so the situation
+   * arises constantly rather than rarely.
+   */
+  addGroup: (init) => {
+    const state = get()
+    const seen = new Set<string>()
+    const blockIds = init.blockIds.filter((id) => {
+      if (!(id in state.blocks) || seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+    if (blockIds.length < MIN_GROUP_SIZE) return null
+
+    const group: Group = { id: init.id ?? createId(), blockIds }
+    // Absorb first, so the old memberships are gone before the new one lands
+    // and no block is ever briefly in two groups at once.
+    const absorbed = pruneGroups(state, new Set(blockIds))
+
+    set({
+      groups: { ...absorbed.groups, [group.id]: group },
+      groupOrder: absorbed.groupOrder.includes(group.id)
+        ? absorbed.groupOrder
+        : [...absorbed.groupOrder, group.id],
+    })
+    return group
+  },
+
+  /**
+   * Dissolves groups. The blocks themselves are untouched — ungrouping is not
+   * a delete, and this is also how undoing a "group" runs backwards.
+   */
+  removeGroups: (ids) =>
+    set((state) => {
+      const doomed = new Set(ids)
+      if (![...doomed].some((id) => id in state.groups)) return state
+
+      const groups: Record<string, Group> = {}
+      for (const id of state.groupOrder) {
+        if (doomed.has(id)) continue
+        const group = state.groups[id]
+        if (group) groups[id] = group
+      }
+
+      return {
+        groups,
+        groupOrder: state.groupOrder.filter((id) => !doomed.has(id)),
       }
     }),
 

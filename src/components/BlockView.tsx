@@ -1,13 +1,25 @@
 import { memo } from 'react'
 import type { Block } from '../types'
+import { blockShapeAttributes, blockTextAttributes } from '../utils/style'
 
-/** World-unit font size. Phase 5 will let each block override it. */
+/**
+ * World-unit font size when a block does not override it.
+ *
+ * Still a literal here rather than a CSS rule because `<text>` needs a real
+ * `font-size` attribute for the label to be measured and centred at all; every
+ * *colour* default stays in the stylesheet.
+ */
 const FONT_SIZE = 14
 
 interface BlockViewProps {
   block: Block
   selected: boolean
-  onEdit: (id: string) => void
+  /**
+   * Double-click. Named for the gesture rather than for one of its outcomes:
+   * since Phase 5 it may open the text editor *or* step into a group, and the
+   * canvas decides which — the block has no business knowing about groups.
+   */
+  onActivate: (id: string) => void
 }
 
 /**
@@ -17,7 +29,7 @@ interface BlockViewProps {
  * single pointer-down handler that hit-tests via `data-block-id`, so a diagram
  * with a thousand blocks still has one listener rather than a thousand.
  */
-function BlockViewImpl({ block, selected, onEdit }: BlockViewProps) {
+function BlockViewImpl({ block, selected, onActivate }: BlockViewProps) {
   const centerX = block.x + block.width / 2
   const centerY = block.y + block.height / 2
 
@@ -29,7 +41,7 @@ function BlockViewImpl({ block, selected, onEdit }: BlockViewProps) {
       className="block"
       onDoubleClick={(event) => {
         event.stopPropagation()
-        onEdit(block.id)
+        onActivate(block.id)
       }}
     >
       {block.type === 'rect' ? (
@@ -40,6 +52,9 @@ function BlockViewImpl({ block, selected, onEdit }: BlockViewProps) {
           width={block.width}
           height={block.height}
           rx={4}
+          // Sparse attributes: a block with no style sets none of them and
+          // renders entirely off `.block__shape`, exactly as before Phase 5.
+          {...blockShapeAttributes(block.style)}
         />
       ) : (
         // Invisible hit area so a bare text block is still easy to grab.
@@ -60,6 +75,7 @@ function BlockViewImpl({ block, selected, onEdit }: BlockViewProps) {
         fontSize={FONT_SIZE}
         textAnchor="middle"
         dominantBaseline="central"
+        {...blockTextAttributes(block.style)}
       >
         {block.text}
       </text>

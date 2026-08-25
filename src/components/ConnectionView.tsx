@@ -1,7 +1,8 @@
 import { memo } from 'react'
 import type { Block, Connection } from '../types'
 import { pathFromPoints, resolveAnchors, routeConnection } from '../utils/routing'
-import { ARROW_MARKER_ID, CONNECTION_CORNER_RADIUS } from './connectionStyle'
+import { connectionLineAttributes } from '../utils/style'
+import { CONNECTION_CORNER_RADIUS, markerIdForStroke } from './connectionStyle'
 
 /**
  * Click target width in *screen* pixels, divided by the zoom like every other
@@ -65,7 +66,10 @@ function ConnectionViewImpl({
         d={d}
         fill="none"
         vectorEffect="non-scaling-stroke"
-        markerEnd={`url(#${ARROW_MARKER_ID})`}
+        // Sparse: an unstyled arrow sets nothing and keeps the stylesheet's
+        // colour, width and (absent) dash pattern.
+        {...connectionLineAttributes(connection.style)}
+        markerEnd={`url(#${markerIdForStroke(connection.style?.stroke)})`}
         pointerEvents="none"
       />
     </g>

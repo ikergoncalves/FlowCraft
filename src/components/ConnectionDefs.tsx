@@ -1,15 +1,18 @@
-import { ARROW_MARKER_ID } from './connectionStyle'
+import { ARROW_MARKER_ID, markerIdForStroke } from './connectionStyle'
 
 /** Arrowhead size in screen pixels: length along the line, then across it. */
 const ARROW_LENGTH_PX = 10
 const ARROW_WIDTH_PX = 8
 
-interface ConnectionDefsProps {
+interface ArrowMarkerProps {
+  id: string
   zoom: number
+  /** Explicit colour, or `undefined` to let the stylesheet decide. */
+  stroke?: string
 }
 
 /**
- * The shared arrowhead marker.
+ * One arrowhead marker.
  *
  * Sizing a marker so it neither balloons nor vanishes as the canvas zooms is
  * the fiddly part. The usual `markerUnits="strokeWidth"` is no help here: the
@@ -19,15 +22,13 @@ interface ConnectionDefsProps {
  * marker is measured in user space and its box is divided by the zoom, the
  * same trick the resize handles use. The `viewBox` then lets the arrow shape
  * itself stay in fixed coordinates and be scaled to fit that box.
- *
- * One marker serves every connection, so this costs one `<defs>` entry rather
- * than one per arrow.
  */
-export function ConnectionDefs({ zoom }: ConnectionDefsProps) {
+function ArrowMarker({ id, zoom, stroke }: ArrowMarkerProps) {
   return (
     <marker
-      id={ARROW_MARKER_ID}
+      id={id}
       data-testid="arrow-marker"
+      data-arrow-stroke={stroke}
       viewBox={`0 0 ${ARROW_LENGTH_PX} ${ARROW_WIDTH_PX}`}
       markerUnits="userSpaceOnUse"
       markerWidth={ARROW_LENGTH_PX / zoom}
@@ -39,8 +40,47 @@ export function ConnectionDefs({ zoom }: ConnectionDefsProps) {
     >
       <path
         className="connection__arrow"
+        // Only an explicit colour overrides the class; without one the
+        // stylesheet keeps control, which is what Phase 6's themes need.
+        {...(stroke === undefined ? {} : { fill: stroke })}
         d={`M 0 0 L ${ARROW_LENGTH_PX} ${ARROW_WIDTH_PX / 2} L 0 ${ARROW_WIDTH_PX} z`}
       />
     </marker>
+  )
+}
+
+interface ConnectionDefsProps {
+  zoom: number
+  /** The distinct stroke colours in use — see `arrowMarkerStrokes`. */
+  strokes: readonly string[]
+}
+
+/**
+ * The arrowhead markers: the default one, plus one per colour in use.
+ *
+ * Phase 3 shipped a single shared marker, which was right until connections
+ * could be coloured — a red arrow with a grey head reads as a rendering bug.
+ * The alternative, a marker per *connection*, would put an element in `<defs>`
+ * for every arrow in the document and re-create it on every render; keying by
+ * colour means a diagram of five hundred arrows in six colours defines seven
+ * markers.
+ *
+ * Selection is deliberately not part of the key. A selected arrow is already
+ * brighter and thicker, and doubling the marker count to tint the head as well
+ * would buy very little for a permanent factor of two.
+ */
+export function ConnectionDefs({ zoom, strokes }: ConnectionDefsProps) {
+  return (
+    <>
+      <ArrowMarker id={ARROW_MARKER_ID} zoom={zoom} />
+      {strokes.map((stroke) => (
+        <ArrowMarker
+          key={stroke}
+          id={markerIdForStroke(stroke)}
+          zoom={zoom}
+          stroke={stroke}
+        />
+      ))}
+    </>
   )
 }

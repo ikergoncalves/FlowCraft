@@ -28,6 +28,8 @@ function diagram(): ElementSource {
     blockOrder: blocks.map((item) => item.id),
     connections: Object.fromEntries(connections.map((item) => [item.id, item])),
     connectionOrder: connections.map((item) => item.id),
+    groups: {},
+    groupOrder: [],
   }
 }
 
@@ -75,7 +77,7 @@ describe('collectElements', () => {
 
   it('ignores ids that are not in the diagram', () => {
     const set = collectElements(diagram(), ['ghost'])
-    expect(set).toEqual({ blocks: [], connections: [] })
+    expect(set).toEqual({ blocks: [], connections: [], groups: [] })
   })
 })
 
@@ -138,6 +140,7 @@ describe('cloneElements', () => {
     const set = {
       blocks: [block('a')],
       connections: [connection('ax', 'a', 'x')],
+      groups: [],
     }
     expect(cloneElements(set, { x: 0, y: 0 }, idFactory()).connections).toEqual([])
   })

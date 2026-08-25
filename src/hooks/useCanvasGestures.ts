@@ -29,6 +29,7 @@ import {
   type Rect,
   type ResizeHandle,
 } from '../utils/geometry'
+import { expandToGroups } from '../utils/groups'
 import { snapPoint } from '../utils/snap'
 import type { ConnectDraft } from '../components/GhostConnection'
 import { commitMove, commitResize, createConnection } from '../history/actions'
@@ -245,15 +246,40 @@ export function useCanvasGestures(
 
     const blockId = attributeOf(event.target, 'data-block-id')
     if (blockId !== null && blockId in state.blocks) {
+      // A grouped block is grabbed as its whole group. `expandToGroups` is
+      // the single place that rule lives, so click, shift-click and the
+      // marquee below cannot drift apart on what "a group" means.
+      const unit = expandToGroups(state, [blockId])
+
       if (isAdditive(event)) {
         // A modified click edits the selection and stops there; dragging a
         // block in or out of a selection at the same time reads as a slip.
-        state.toggleSelection(blockId)
+        // The whole unit goes in or out together — a shift-click that pulled
+        // one member out of a group would leave the group half-selected, and
+        // nothing else in the editor can express that.
+        const selected = new Set(state.selectedIds)
+        const all = unit.every((id) => selected.has(id))
+        for (const id of unit) {
+          if (all) selected.delete(id)
+          else selected.add(id)
+        }
+        state.setSelection(
+          state.blockOrder.filter((id) => selected.has(id)),
+          state.selectedConnectionIds,
+        )
         return IDLE
       }
-      // Grabbing an unselected block replaces the selection with it; grabbing
-      // one that is already selected moves the whole selection.
-      if (!state.selectedIds.includes(blockId)) state.select(blockId)
+
+      /*
+       * Grabbing an unselected block replaces the selection with its unit;
+       * grabbing one that is already selected moves the whole selection.
+       *
+       * The second half is what keeps a group "entered". Double-clicking a
+       * member narrows the selection to that one block, and re-widening here
+       * would undo that the instant the user tried to drag what they had just
+       * singled out.
+       */
+      if (!state.selectedIds.includes(blockId)) state.select(unit)
       return {
         mode: 'move',
         origin: positionSnapshot(useDiagramStore.getState()),
@@ -324,10 +350,16 @@ export function useCanvasGestures(
     // Blocks only. A marquee that also swept up every arrow crossing it would
     // make Delete unpredictable, and connections have no geometry of their own
     // to move or resize once selected.
-    const hits = state.blockOrder.filter((id) => {
-      const block = state.blocks[id]
-      return block !== undefined && rectsIntersect(rect, block)
-    })
+    // Widened to whole groups, so a marquee clipping one member of a group
+    // takes the group. A marquee that could leave a group half-selected would
+    // be the one gesture in the editor able to break that rule.
+    const hits = expandToGroups(
+      state,
+      state.blockOrder.filter((id) => {
+        const block = state.blocks[id]
+        return block !== undefined && rectsIntersect(rect, block)
+      }),
+    )
 
     // Additive keeps what was there — so an empty additive marquee is a
     // no-op, while an empty plain one clears.

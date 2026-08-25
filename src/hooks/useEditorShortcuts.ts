@@ -3,8 +3,10 @@ import {
   copySelection,
   deleteSelection,
   duplicateSelection,
+  groupSelection,
   nudgeSelection,
   pasteClipboard,
+  ungroupSelection,
 } from '../history/actions'
 import { useHistoryStore } from '../history/historyStore'
 import { useDiagramStore } from '../store/diagramStore'
@@ -88,6 +90,16 @@ function handleAccelerator(event: KeyboardEvent): boolean {
       if (event.shiftKey) return false
       pasteClipboard()
       return true
+    case 'g':
+      // Ctrl+G groups, Ctrl+Shift+G ungroups. No collision with the bare `G`
+      // that toggles snapping: this branch only runs with Ctrl/Cmd held, and
+      // the unmodified path below is never reached for a modified key.
+      if (event.shiftKey) ungroupSelection()
+      else groupSelection()
+      // Claimed either way, even when nothing was grouped: Ctrl+G is Chrome's
+      // find-again, and letting it through would open a find bar over the
+      // canvas whenever a selection was too small to group.
+      return true
     default:
       return false
   }
@@ -109,6 +121,7 @@ function handleAccelerator(event: KeyboardEvent): boolean {
  * | `Ctrl/Cmd` + `Z`         | undo — `Shift` or `Ctrl/Cmd + Y` to redo  |
  * | `Ctrl/Cmd` + `D`         | duplicate the selection                   |
  * | `Ctrl/Cmd` + `C` / `V`   | copy / paste                              |
+ * | `Ctrl/Cmd` + `G`         | group — `Shift` to ungroup                |
  *
  * Escape is also how a drag in progress is cancelled; the canvas claims it
  * first, from a capture-phase listener, so a cancelled drag does not also lose

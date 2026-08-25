@@ -13,13 +13,16 @@ import { useSpaceKey } from '../hooks/useSpaceKey'
 import type { CanvasRect } from '../types'
 import { GRID_SIZE, gridStepForZoom, screenToWorld, viewBoxFor } from '../utils/coords'
 import { makeBlockAt } from '../utils/blocks'
+import { groupOf, selectedGroups } from '../utils/groups'
 import { commitBlockText, createBlock } from '../history/actions'
 import { snapPoint } from '../utils/snap'
 import { BlockPorts } from './BlockPorts'
 import { BlockView } from './BlockView'
 import { ConnectionDefs } from './ConnectionDefs'
 import { ConnectionView } from './ConnectionView'
+import { arrowMarkerStrokes } from './connectionStyle'
 import { GhostConnection } from './GhostConnection'
+import { PropertiesPanel } from './PropertiesPanel'
 import { SelectionOverlay } from './SelectionOverlay'
 import { TextEditor } from './TextEditor'
 import { ZoomIndicator } from './ZoomIndicator'
@@ -46,6 +49,10 @@ export function Canvas() {
   const tool = useDiagramStore((state) => state.tool)
   const selectedIds = useDiagramStore((state) => state.selectedIds)
   const selectedConnectionIds = useDiagramStore((state) => state.selectedConnectionIds)
+  // The raw group slices rather than a memoised list: what the canvas needs is
+  // a `GroupSource` to derive the selected groups from, not a paint order.
+  const groupMap = useDiagramStore((state) => state.groups)
+  const groupOrder = useDiagramStore((state) => state.groupOrder)
   const blocks = useBlockList()
   const connections = useConnectionList()
 
@@ -72,6 +79,14 @@ export function Canvas() {
     () => new Map(blocks.map((block) => [block.id, block])),
     [blocks],
   )
+  // Which groups count as selected is derived, never stored — see the note on
+  // `DiagramState.groups`.
+  const activeGroups = useMemo(
+    () => selectedGroups({ groups: groupMap, groupOrder }, selectedIds),
+    [groupMap, groupOrder, selectedIds],
+  )
+  // One arrowhead marker per colour in use, not one per arrow.
+  const markerStrokes = useMemo(() => arrowMarkerStrokes(connections), [connections])
 
   /**
    * Tracks the hovered block from `pointerover`, which bubbles and fires only
@@ -141,6 +156,33 @@ export function Canvas() {
     setTool('select')
   }
 
+  /**
+   * What a double-click on a block means, which depends on whether it is in a
+   * group and whether the user is already inside that group.
+   *
+   * Double-click is the "enter the group" gesture. `Alt` + click was the
+   * alternative and was rejected: `Alt` already inverts snapping for the
+   * duration of a gesture, so an Alt-click that turned into a small drag would
+   * be entering a group and disabling the grid at the same time — two
+   * unrelated meanings on one modifier, distinguished only by how far the
+   * pointer happened to travel.
+   *
+   * Inside a group, a second double-click edits the text as usual, so nothing
+   * a grouped block could do before has become unreachable; it just takes one
+   * more press, which is the same bargain every editor with groups makes.
+   */
+  const handleBlockActivate = (id: string) => {
+    const state = useDiagramStore.getState()
+    const group = groupOf(state, id)
+    const alreadyInside = state.selectedIds.length === 1 && state.selectedIds[0] === id
+
+    if (group && !alreadyInside) {
+      state.select(id)
+      return
+    }
+    setEditingId(id)
+  }
+
   const editingBlock =
     editingId === null ? undefined : blocks.find((b) => b.id === editingId)
   const gridStep = gridStepForZoom(viewport.zoom)
@@ -199,7 +241,7 @@ export function Canvas() {
             <circle className="grid__dot" cx={gridStep} cy={gridStep} r={dotRadius} />
           </pattern>
 
-          <ConnectionDefs zoom={viewport.zoom} />
+          <ConnectionDefs zoom={viewport.zoom} strokes={markerStrokes} />
         </defs>
 
         <rect
@@ -236,7 +278,7 @@ export function Canvas() {
             key={block.id}
             block={block}
             selected={selectedSet.has(block.id)}
-            onEdit={setEditingId}
+            onActivate={handleBlockActivate}
           />
         ))}
 
@@ -276,8 +318,14 @@ export function Canvas() {
           />
         )}
 
-        <SelectionOverlay blocks={selectedBlocks} zoom={viewport.zoom} />
+        <SelectionOverlay
+          blocks={selectedBlocks}
+          groups={activeGroups}
+          zoom={viewport.zoom}
+        />
       </svg>
+
+      <PropertiesPanel />
 
       {editingBlock && (
         <TextEditor

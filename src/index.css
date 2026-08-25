@@ -1,7 +1,9 @@
 /*
- * Phase 1 styling is deliberately plain: dark/light theming lands in Phase 6
- * and element styling in Phase 5. Colours live in custom properties so those
- * phases have a single place to swap.
+ * Colours live in custom properties so Phase 6's dark/light themes have a
+ * single place to swap. Per-element overrides from the properties panel are
+ * SVG attributes rather than rules here, and only for the fields a user has
+ * actually set — an unstyled block still paints entirely off these classes,
+ * which is what keeps a theme swap able to reach it.
  */
 :root {
   --surface: #14161a;
@@ -14,6 +16,7 @@
   --block-fill: #232833;
   --block-stroke: #3b4351;
   --selection-bounds: #6f7d94;
+  --group: #a9b6cc;
   --connection: #7d8798;
   --connection-selected: #4c8dff;
   --port: #4c8dff;
@@ -183,9 +186,11 @@ body,
   stroke-width: 2.5;
 }
 
-/* The arrowhead stays the base colour when selected: one `<marker>` is shared
- * by every connection, and per-instance marker tinting needs `context-stroke`,
- * which is not portable yet. The thicker, brighter line carries the state. */
+/* The arrowhead follows its line's colour but not its selected state. Markers
+ * cannot inherit from the path that references them — `context-stroke` is not
+ * portable — so `ConnectionDefs` defines one marker per colour in use and the
+ * line points at the matching id. Keying on selection as well would double the
+ * marker count for something the thicker, brighter line already carries. */
 
 .connection__hit {
   cursor: pointer;
@@ -296,4 +301,160 @@ body,
 .zoom-indicator__reset:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+
+/* Grouping -------------------------------------------------------------- */
+
+/*
+ * Distinct from both the per-block outline (dashed accent) and the
+ * multi-selection envelope (thin, dim, flush): a group reads as a fine dotted
+ * outline set slightly outside its members, so "these blocks are one thing"
+ * and "these blocks happen to be selected together" never look alike.
+ */
+.selection__group {
+  stroke: var(--group);
+  stroke-width: 1.5;
+  stroke-dasharray: 1 5;
+  stroke-linecap: round;
+}
+
+/* Properties panel ------------------------------------------------------- */
+
+.properties {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 208px;
+  max-width: calc(100% - 24px);
+  /* Never taller than the canvas: on a short window the panel scrolls rather
+   * than spilling over the zoom indicator or off the bottom edge. */
+  max-height: calc(100% - 68px);
+  padding: 12px;
+  overflow-y: auto;
+  background: rgb(28 31 38 / 94%);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  user-select: none;
+}
+
+/* Below ~560px the floating panel would cover most of the canvas, so it
+ * becomes a strip across the bottom instead of a column down the side. */
+@media (width <= 560px) {
+  .properties {
+    top: auto;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    width: auto;
+    max-height: 45%;
+  }
+}
+
+.properties__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 176px;
+}
+
+.properties__heading {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.properties__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.properties__label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* The explicit "mixed" indicator. A colour input cannot be blank, so a
+ * divergent selection says so in words rather than showing one block's value
+ * and quietly speaking for the rest. */
+.properties__mixed {
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--text);
+  background: rgb(255 255 255 / 10%);
+  border-radius: 4px;
+}
+
+.properties__swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.properties__swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.properties__swatch[aria-pressed='true'] {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.properties__picker {
+  width: 26px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.properties__number {
+  width: 100%;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.properties__number::placeholder {
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.properties__check {
+  align-self: flex-start;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.properties__swatch:focus-visible,
+.properties__picker:focus-visible,
+.properties__number:focus-visible,
+.properties__check:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }

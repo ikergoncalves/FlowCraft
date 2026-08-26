@@ -1,6 +1,7 @@
 import { redoLabel, undoLabel, useHistoryStore } from '../history/historyStore'
 import { useDiagramStore } from '../store/diagramStore'
 import { useThemeStore } from '../theme/themeStore'
+import { ExportMenu } from './ExportMenu'
 import { StorageStatus } from './StorageStatus'
 import type { Tool } from '../types'
 
@@ -120,6 +121,8 @@ export function Toolbar() {
           <kbd className="toolbar__kbd">L</kbd>
         </button>
       </div>
+
+      <ExportMenu />
 
       <StorageStatus />
     </div>

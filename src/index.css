@@ -147,6 +147,85 @@ body,
   border-radius: 4px;
 }
 
+/* Export menu ------------------------------------------------------------ */
+
+.export {
+  position: relative;
+}
+
+/* Anchored under its button rather than rendered in place: the toolbar is a
+ * flex row, and a panel that took part in it would push the canvas down. */
+.export__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 184px;
+  padding: 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+}
+
+.export__item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.export__item:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.export__item:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* The pixel size the button will produce, so 1x and 2x are a choice rather
+ * than a guess. */
+.export__hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.export__option {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.export__error {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--warning);
+}
+
+.export__item:focus-visible,
+.export__option:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* Canvas ----------------------------------------------------------------- */
 
 .canvas {

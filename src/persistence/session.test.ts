@@ -213,6 +213,20 @@ describe('restoring on open', () => {
     expect(persistence().repairs.length).toBeGreaterThan(0)
   })
 
+  it('drops a selection that belonged to the document it replaced', async () => {
+    // The ids in a selection name blocks in *some* document. After a restore
+    // they name blocks in the one that was just thrown away, and the overlay
+    // would be outlining things that are not there.
+    useDiagramStore.setState({
+      selectedIds: ['from-before'],
+      selectedConnectionIds: ['also-from-before'],
+    })
+    await start(memoryDriver({ [DOCUMENT_KEY]: toDocument(seedSlice()) }))
+
+    expect(store().selectedIds).toEqual([])
+    expect(store().selectedConnectionIds).toEqual([])
+  })
+
   it('gives the user no history to undo the restore with', async () => {
     // Undo immediately after opening would empty the canvas, which is not an
     // edit the user made.
@@ -452,6 +466,15 @@ describe('clearing the saved data', () => {
     expect(store().groupOrder).toEqual([])
     expect(await driver.read(DOCUMENT_KEY)).toBeUndefined()
     expect(await driver.read(PREFERENCES_KEY)).toBeUndefined()
+  })
+
+  it('leaves nothing selected, because there is nothing left', async () => {
+    const driver = memoryDriver({ [DOCUMENT_KEY]: toDocument(seedSlice()) })
+    const { session } = await start(driver)
+    store().select(['a', 'b'])
+
+    await session.clear()
+    expect(store().selectedIds).toEqual([])
   })
 
   it('does not let the pending save put the document straight back', async () => {

@@ -11,7 +11,25 @@
  * Failures print the expected and actual numbers and set a non-zero exit code.
  */
 
-import { createChecklist, MODIFIER, withBrowser } from './browser-harness.mjs'
+import { createChecklist, MODIFIER, sleep, withBrowser } from './browser-harness.mjs'
+
+/**
+ * Polls IndexedDB until the document holds `expected` blocks.
+ *
+ * A flat sleep past the 600ms debounce would work most of the time, which is
+ * exactly the property that makes a harness flaky on a slower machine.
+ */
+async function waitForStored(page, read, expected, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const stored = await read()
+    if (stored?.document && Object.keys(stored.document.blocks).length === expected) {
+      return stored
+    }
+    if (Date.now() > deadline) return stored
+    await sleep(100)
+  }
+}
 
 /** Reads every rendered block straight out of the SVG, in world units. */
 const READ_BLOCKS = `
@@ -670,6 +688,139 @@ async function main() {
     )
 
     /*
+     * Phase 6 — persistence.
+     *
+     * IndexedDB does not exist in jsdom, which is why the storage layer sits
+     * behind an injectable driver and every unit test runs against an
+     * in-memory one. That leaves exactly one claim untested by construction:
+     * that the *real* driver works. This is where it is made.
+     */
+    console.log('\nPersistence')
+    await page.press('a', MODIFIER.ctrl)
+    await page.press('Delete')
+
+    const readStored = () =>
+      page.evaluate(`
+        return new Promise((resolve) => {
+          const open = indexedDB.open('flowcraft', 1)
+          open.onerror = () => { resolve({ error: String(open.error) }) }
+          open.onsuccess = () => {
+            const tx = open.result.transaction('state', 'readonly')
+            const store = tx.objectStore('state')
+            const doc = store.get('document')
+            const prefs = store.get('preferences')
+            tx.oncomplete = () => {
+              open.result.close()
+              resolve({ document: doc.result ?? null, preferences: prefs.result ?? null })
+            }
+          }
+        })
+      `)
+
+    check.ok(
+      'the page really has IndexedDB',
+      await page.evaluate(`return typeof indexedDB === 'object'`),
+    )
+    check.ok(
+      'the editor reports auto-save rather than a failure',
+      await page.evaluate(`
+        const chip = document.querySelector('[data-testid="storage-status"]')
+        return chip && chip.dataset.status !== 'unavailable'
+      `),
+      'the storage chip says storage is unavailable',
+    )
+
+    await page.press('r')
+    await page.click(canvas.left + 300, canvas.top + 260)
+    await page.press('r')
+    await page.click(canvas.left + 700, canvas.top + 260)
+    const toPersist = await blocks()
+    check.equal('two blocks to persist', toPersist.length, 2)
+
+    // Group them, so the saved document has all three kinds of element in it.
+    await page.press('a', MODIFIER.ctrl)
+    await page.press('g', MODIFIER.ctrl)
+
+    // The debounce is 600ms in the real app; wait past it rather than guessing.
+    const stored = await waitForStored(page, readStored, 2)
+    check.ok('the document reaches IndexedDB', stored?.document, 'nothing was stored')
+    check.equal('it carries a version from the first save', stored?.document?.version, 1)
+    check.equal(
+      'and every element it should',
+      stored ? Object.keys(stored.document.blocks).length : 0,
+      2,
+    )
+    check.equal(
+      'including the group',
+      stored ? Object.keys(stored.document.groups).length : 0,
+      1,
+    )
+    check.ok(
+      'preferences are stored apart from the document',
+      stored?.preferences && stored.preferences.theme !== undefined,
+      'no preferences record',
+    )
+    check.ok(
+      'and the document carries none of them',
+      stored?.document?.viewport === undefined && stored?.document?.theme === undefined,
+      'the document record carries UI preferences',
+    )
+
+    console.log('\nSurviving a reload')
+    const beforeReload = (await blocks()).map((block) => ({
+      id: block.id,
+      x: block.x,
+      y: block.y,
+      text: block.text,
+    }))
+    await page.press('l')
+    await page.settle()
+    await sleep(900)
+
+    await page.reload()
+    const afterReload = (await blocks()).map((block) => ({
+      id: block.id,
+      x: block.x,
+      y: block.y,
+      text: block.text,
+    }))
+    check.equal(
+      'the diagram comes back after a reload',
+      JSON.stringify(afterReload),
+      JSON.stringify(beforeReload),
+    )
+    check.equal(
+      'ids survive too, so the arrows would still point somewhere',
+      afterReload.every((block) => beforeReload.some((was) => was.id === block.id)),
+      true,
+    )
+    check.equal(
+      'the theme comes back with it',
+      await page.evaluate(`return document.documentElement.dataset.theme`),
+      'light',
+    )
+    check.equal(
+      'the restore leaves nothing to undo',
+      (await page.evaluate(READ_HISTORY_BUTTONS)).undo?.disabled,
+      true,
+    )
+
+    console.log('\nClearing the saved data')
+    await page.evaluate(`window.confirm = () => true; return true`)
+    const clearButton = await page.evaluate(`
+      const box = document.querySelector('[data-testid="clear-storage"]').getBoundingClientRect()
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+    `)
+    await page.click(clearButton.x, clearButton.y)
+    await sleep(400)
+    check.equal('clearing empties the canvas', (await blocks()).length, 0)
+    const afterClear = await readStored()
+    check.equal('and the stored document with it', afterClear?.document, null)
+
+    await page.reload()
+    check.equal('and it stays gone across a reload', (await blocks()).length, 0)
+
+    /*
      * The narrow breakpoint, measured for the first time.
      *
      * `@media (width <= 560px)` was written in Phase 5 and never checked: this
@@ -678,9 +829,14 @@ async function main() {
      * this is the only place in the repository that can assert any of it.
      */
     console.log('\nNarrow viewport (400x800)')
-    // The panel only exists while something is selected, and the theme section
-    // above finished by clicking bare canvas.
+    // The panel only exists while something is selected, and the section above
+    // finished by clearing the canvas entirely.
+    await page.press('r')
+    await page.click(canvas.left + 240, canvas.top + 220)
+    await page.press('r')
+    await page.click(canvas.left + 560, canvas.top + 220)
     await page.press('a', MODIFIER.ctrl)
+    check.equal('two blocks to select', (await blocks()).length, 2)
     await page.resize(400, 800)
     const narrowCanvas = await page.evaluate(READ_CANVAS_BOX)
     const narrow = await page.evaluate(READ_PANEL)

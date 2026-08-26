@@ -214,6 +214,29 @@ export class Page {
   }
 
   /**
+   * Reloads the page and waits for the app to be back.
+   *
+   * The whole point of a reload check is that the *process* is gone: the
+   * store, the history and the clipboard are all fresh, and only what reached
+   * storage comes back. Waiting on the canvas alone is not enough — the
+   * restore is asynchronous, so this also waits for the storage chip to stop
+   * saying it is still opening.
+   */
+  async reload() {
+    await this.session.send('Page.reload', { ignoreCache: false })
+    await waitFor(
+      () =>
+        this.evaluate(`
+          const chip = document.querySelector('[data-testid="storage-status"]')
+          return !!document.querySelector('[data-testid="canvas"]') &&
+            !!chip && chip.dataset.status !== 'loading'
+        `),
+      { what: 'the app to remount and finish restoring' },
+    )
+    await this.settle()
+  }
+
+  /**
    * Presses and releases one key.
    *
    * Modified keys are sent as `rawKeyDown` with no `text`: Chrome only

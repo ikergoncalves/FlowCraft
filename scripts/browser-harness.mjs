@@ -159,6 +159,7 @@ export const MODIFIER = { alt: 1, ctrl: 2, meta: 4, shift: 8 }
 const KEYS = {
   a: { key: 'a', code: 'KeyA', vk: 65, text: 'a' },
   g: { key: 'g', code: 'KeyG', vk: 71, text: 'g' },
+  l: { key: 'l', code: 'KeyL', vk: 76, text: 'l' },
   r: { key: 'r', code: 'KeyR', vk: 82, text: 'r' },
   v: { key: 'v', code: 'KeyV', vk: 86, text: 'v' },
   z: { key: 'z', code: 'KeyZ', vk: 90, text: 'z' },

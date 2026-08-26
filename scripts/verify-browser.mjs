@@ -553,6 +553,123 @@ async function main() {
     check.equal('with both blocks still there', (await blocks()).length, 3)
 
     /*
+     * Phase 6 — themes.
+     *
+     * The only place the claim can be tested. jsdom loads no stylesheet and
+     * resolves no custom property through the cascade, so "an unstyled block
+     * repaints and a painted one does not" is, in a unit test, an assertion
+     * about two empty strings. Here it is `getComputedStyle` on a real
+     * renderer, which is also what caught the presentation-attribute bug in
+     * Phase 5.
+     */
+    console.log('\nThemes')
+    await page.press('a', MODIFIER.ctrl)
+    await page.press('Delete')
+    await page.press('r')
+    await page.click(canvas.left + 240, canvas.top + 200)
+    await page.press('r')
+    await page.click(canvas.left + 620, canvas.top + 200)
+    current = await blocks()
+    const plainBlock = current[0]
+    const paintedBlock = current[1]
+
+    // Paint the second one orange, so the run has one block on the stylesheet
+    // and one carrying its own colour.
+    await page.click(centerOf(paintedBlock).x, centerOf(paintedBlock).y)
+    const orange = await page.evaluate(`
+      const node = document.querySelector('[data-swatch="#e2683c"]')
+      const box = node.getBoundingClientRect()
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+    `)
+    await page.click(orange.x, orange.y)
+    await page.click(canvas.left + 60, canvas.top + 600)
+
+    const readTheme = () =>
+      page.evaluate(`
+        const root = document.documentElement
+        const shape = (id) => getComputedStyle(
+          document.querySelector('[data-block-id="' + id + '"] .block__shape'),
+        )
+        const toolbar = document.querySelector('[data-testid="theme-toggle"]')
+        return {
+          theme: root.dataset.theme,
+          colorScheme: root.style.colorScheme,
+          blockFillVar: getComputedStyle(root).getPropertyValue('--block-fill').trim(),
+          surfaceVar: getComputedStyle(root).getPropertyValue('--surface').trim(),
+          plainFill: shape('${plainBlock.id}').fill,
+          paintedFill: shape('${paintedBlock.id}').fill,
+          target: toolbar.dataset.themeTarget,
+          styleTags: document.querySelectorAll('#flowcraft-theme').length,
+        }
+      `)
+
+    // Whatever the platform preference gave us, start from a known theme.
+    let themeState = await readTheme()
+    if (themeState.theme !== 'dark') await page.press('l')
+    const dark = await readTheme()
+
+    check.equal('the generated sheet is installed exactly once', dark.styleTags, 1)
+    check.equal('the document opens on a named theme', dark.theme, 'dark')
+    check.equal('and tells the browser which way to paint', dark.colorScheme, 'dark')
+    check.ok(
+      'the custom properties really resolve',
+      dark.blockFillVar.length > 0 && dark.surfaceVar.length > 0,
+      `--block-fill was "${dark.blockFillVar}"`,
+    )
+    check.ok(
+      'an unstyled block paints from them',
+      dark.plainFill && dark.plainFill !== 'none' && dark.plainFill !== 'rgb(0, 0, 0)',
+      `computed fill was "${dark.plainFill}"`,
+    )
+    check.equal('the painted block is orange', dark.paintedFill, 'rgb(226, 104, 60)')
+
+    await page.press('l')
+    const light = await readTheme()
+    check.equal('L switches the theme', light.theme, 'light')
+    check.equal('the toggle now offers dark', light.target, 'dark')
+    check.ok(
+      'the custom property itself moved',
+      light.blockFillVar !== dark.blockFillVar,
+      `--block-fill stayed "${light.blockFillVar}"`,
+    )
+    // The load-bearing pair: the theme reaches what the user did not paint,
+    // and only that.
+    check.ok(
+      'the unstyled block really repaints',
+      light.plainFill !== dark.plainFill,
+      `fill stayed "${light.plainFill}" across the swap`,
+    )
+    check.equal('the painted block does not', light.paintedFill, 'rgb(226, 104, 60)')
+
+    const themedHistory = await page.evaluate(READ_HISTORY_BUTTONS)
+    check.ok(
+      'switching theme is not an undoable edit',
+      themedHistory.undo?.label !== 'Undo: Switch theme',
+      `undo offers "${themedHistory.undo?.label}"`,
+    )
+
+    // Back again, which is the case an implicit `:root` default gets wrong:
+    // with no explicit `[data-theme='dark']` block, the light rules would win
+    // on document order and the toggle would only work once.
+    const toggle = await page.evaluate(`
+      const box = document.querySelector('[data-testid="theme-toggle"]').getBoundingClientRect()
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+    `)
+    await page.click(toggle.x, toggle.y)
+    const backToDark = await readTheme()
+    check.equal('the toolbar button switches back', backToDark.theme, 'dark')
+    check.equal(
+      'and the palette comes back with it',
+      backToDark.blockFillVar,
+      dark.blockFillVar,
+    )
+    check.equal(
+      'a painted block is still untouched',
+      backToDark.paintedFill,
+      dark.paintedFill,
+    )
+
+    /*
      * The narrow breakpoint, measured for the first time.
      *
      * `@media (width <= 560px)` was written in Phase 5 and never checked: this
@@ -561,6 +678,9 @@ async function main() {
      * this is the only place in the repository that can assert any of it.
      */
     console.log('\nNarrow viewport (400x800)')
+    // The panel only exists while something is selected, and the theme section
+    // above finished by clicking bare canvas.
+    await page.press('a', MODIFIER.ctrl)
     await page.resize(400, 800)
     const narrowCanvas = await page.evaluate(READ_CANVAS_BOX)
     const narrow = await page.evaluate(READ_PANEL)

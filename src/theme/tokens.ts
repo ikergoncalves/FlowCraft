@@ -77,6 +77,13 @@ export type ThemeTokens = {
   blockStroke: string
   connection: string
 
+  /**
+   * The one colour that means "something is not right" — the storage chip when
+   * the editor is running without a place to save to. Distinct from `accent`
+   * on purpose: accent means "this is active", and a degraded session is not.
+   */
+  warning: string
+
   /* Selection chrome. */
   selectionBounds: string
   group: string
@@ -115,6 +122,7 @@ export const THEMES: Record<ThemeName, ThemeTokens> = {
     blockFill: '#232833',
     blockStroke: '#3b4351',
     connection: '#7d8798',
+    warning: '#e0b341',
     selectionBounds: '#6f7d94',
     group: '#a9b6cc',
     connectionSelected: '#4c8dff',
@@ -136,6 +144,7 @@ export const THEMES: Record<ThemeName, ThemeTokens> = {
     blockFill: '#ffffff',
     blockStroke: '#c2c9d4',
     connection: '#6b7484',
+    warning: '#a16207',
     selectionBounds: '#8b94a5',
     group: '#5b6472',
     connectionSelected: '#2563eb',

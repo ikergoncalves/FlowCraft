@@ -108,6 +108,36 @@ body,
   outline-offset: 2px;
 }
 
+/* Pushed to the far end: storage is status, not a tool, and it should not sit
+ * in the run of things you click to draw with. */
+.toolbar__group--end {
+  align-items: center;
+  margin-left: auto;
+}
+
+.toolbar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* The one state worth a colour. Everything else is ordinary progress. */
+.toolbar__status[data-status='unavailable'] {
+  color: var(--warning);
+}
+
+.toolbar__status-note {
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--text);
+  background: var(--wash);
+  border-radius: 4px;
+}
+
 .toolbar__kbd {
   padding: 1px 5px;
   font-family: inherit;
@@ -492,5 +522,10 @@ body,
   .toolbar__brand,
   .toolbar__kbd {
     display: none;
+  }
+
+  /* The auto margin would strand the storage chip alone on a wrapped row. */
+  .toolbar__group--end {
+    margin-left: 0;
   }
 }

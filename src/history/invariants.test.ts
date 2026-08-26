@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { fromDocument, toDocument } from '../persistence/document'
+import { loadDocument } from '../persistence/validate'
 import { clearClipboard } from '../store/clipboard'
 import { useDiagramStore } from '../store/diagramStore'
 import type { Block } from '../types'
@@ -409,6 +411,98 @@ describe('a full session, undone and redone', () => {
 
     expectStructurallySound('after a ragged walk')
     expect(store().connectionOrder.length).toBe(2)
+  })
+})
+
+/**
+ * Writes the document out, reads it back, and hands over what came back.
+ *
+ * Deliberately the full path the app uses — `toDocument`, a JSON round trip
+ * standing in for the storage layer, then `loadDocument` with its migration
+ * walk and its validator — rather than a direct comparison of two objects.
+ * Anything the format cannot express, the validator would reject, or a
+ * migration would mangle shows up here as a difference.
+ */
+function saveAndReload(where: string) {
+  const written: unknown = JSON.parse(JSON.stringify(toDocument(store())))
+  const result = loadDocument(written)
+  if (!result.ok)
+    throw new Error(`${where}: the document would not load (${result.reason})`)
+  expect(result.repairs, `${where}: a sound document needed repairing`).toEqual([])
+  return fromDocument(result.document)
+}
+
+describe('a full session, saved and reloaded at every step', () => {
+  /*
+   * The new invariant, and the one that closes the loop.
+   *
+   * Undo proves the document can be walked backwards in memory. This proves it
+   * survives leaving the program: after every single step of the same script,
+   * what is written to storage and read back is the document that was there —
+   * not merely an equivalent one, but the same blocks in the same paint order
+   * with the same styles, the same anchors and the same group memberships.
+   *
+   * Checked after *every* step rather than at the end, for the same reason the
+   * structural check is: a format that loses something on step nine and
+   * happens to be handed a document without it on step twenty looks fine at
+   * the end.
+   */
+  it('reproduces the document exactly after each step', () => {
+    seedDiagram()
+    expect(saveAndReload('the seeded diagram')).toEqual(documentState())
+
+    for (const step of SCRIPT) {
+      step.run()
+      expect(saveAndReload(`after ${step.name}`), `after ${step.name}`).toEqual(
+        documentState(),
+      )
+    }
+  })
+
+  it('reproduces it again after each undo', () => {
+    // The two mechanisms have to agree at every point on the way back, not
+    // just at the ends: a reload that resurrected something undo had removed
+    // would show up here and nowhere else.
+    seedDiagram()
+    for (const step of SCRIPT) step.run()
+
+    let guard = 0
+    while (history().undoStack.length > 0) {
+      history().undo()
+      guard += 1
+      expect(saveAndReload(`undo #${guard}`), `undo #${guard}`).toEqual(documentState())
+      if (guard > 200) throw new Error('undo stack never drained')
+    }
+  })
+
+  it('a reloaded document is still structurally sound', () => {
+    // The validator's repairs must never be needed on a document this editor
+    // produced. If they are, either the editor is emitting something unsound
+    // or the validator has grown a rule the editor does not follow.
+    seedDiagram()
+    for (const step of SCRIPT) {
+      step.run()
+      store().replaceDocument(saveAndReload(`after ${step.name}`))
+      expectStructurallySound(`reloaded after ${step.name}`)
+    }
+  })
+
+  it('carries the styles, anchors and groups the script created', () => {
+    // Guards the guard: a round trip over a document with no styles in it
+    // proves nothing about styles.
+    seedDiagram()
+    for (const step of SCRIPT.slice(0, SCRIPT.length - 1)) step.run()
+
+    const reloaded = saveAndReload('before the final delete')
+    expect(
+      Object.values(reloaded.blocks).some((block) => block.style !== undefined),
+    ).toBe(true)
+    expect(
+      Object.values(reloaded.connections).some(
+        (connection) => connection.sourceAnchor !== undefined,
+      ),
+    ).toBe(true)
+    expect(reloaded.groupOrder.length).toBeGreaterThan(0)
   })
 })
 

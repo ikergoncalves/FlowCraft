@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
+import type { DocumentSlice } from '../persistence/document'
 import type { Block, Connection, Group, Point, Tool, Viewport } from '../types'
 import { DEFAULT_VIEWPORT } from '../utils/coords'
 import { MIN_GROUP_SIZE, pruneGroups } from '../utils/groups'
@@ -142,6 +143,16 @@ export interface DiagramState {
   snapToGrid: boolean
 
   addBlock: (init: BlockInit) => Block
+  /**
+   * Swaps the whole document out, as a restore from storage does.
+   *
+   * The only action that replaces state wholesale rather than transforming it,
+   * and the only one that is not undoable — see `session.ts`. The selection
+   * goes with it because the ids it named belonged to the document being
+   * replaced; keeping them would leave the overlay outlining blocks that no
+   * longer exist.
+   */
+  replaceDocument: (contents: DocumentSlice) => void
   insertBlocks: (placements: readonly BlockPlacement[]) => void
   insertConnections: (placements: readonly ConnectionPlacement[]) => void
   insertGroups: (placements: readonly GroupPlacement[]) => void
@@ -203,6 +214,18 @@ export const useDiagramStore = create<DiagramState>()((set, get) => ({
     }))
     return block
   },
+
+  replaceDocument: (contents) =>
+    set({
+      blocks: contents.blocks,
+      blockOrder: [...contents.blockOrder],
+      connections: contents.connections,
+      connectionOrder: [...contents.connectionOrder],
+      groups: contents.groups,
+      groupOrder: [...contents.groupOrder],
+      selectedIds: [],
+      selectedConnectionIds: [],
+    }),
 
   /**
    * Puts blocks back exactly where they were, paint order included.

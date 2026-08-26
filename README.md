@@ -10,6 +10,7 @@ Browser-based diagram editor built from scratch — custom drag-and-drop, undo/r
 - **Zustand** for state, with a command pattern for undo/redo
 - **@use-gesture/react** for pointer gestures (pan, zoom, pinch)
 - **Vitest + Testing Library** for unit and component tests
+- **IndexedDB** for auto-save, behind an injectable driver so the logic is testable without one
 - **ESLint (flat config) + Prettier** for linting and formatting
 
 ## Getting started
@@ -76,6 +77,7 @@ checks).
 | Rectangle tool  | `R`                                                    |
 | Text tool       | `T`                                                    |
 | Snap to grid    | `G`, or the **Snap** button (on by default)            |
+| Switch theme    | `L`, or the theme button                               |
 | Create a block  | Pick Rectangle or Text, then click the canvas          |
 | Edit block text | Double-click a block — `Enter` confirms, `Esc` cancels |
 
@@ -297,6 +299,69 @@ happened to travel.
 
 Resizing a group is out of scope: handles still appear only for a single block.
 
+### Themes
+
+| Action       | Input                                   |
+| ------------ | --------------------------------------- |
+| Switch theme | `L`, or the theme button in the toolbar |
+
+Two themes, dark and light. The first visit follows the system's
+`prefers-color-scheme`; after that the choice is remembered.
+
+**A theme repaints what you have not painted yourself.** A block you gave a
+colour keeps that colour in both themes — it is what you chose, and a theme has
+no business overriding it. A block you never touched follows the theme, because
+its colour was never part of the document in the first place: it emits no
+`fill` at all and takes whatever the stylesheet says.
+
+The properties panel shows the active theme's defaults, so the swatch under an
+unstyled block is the colour it is actually painted right now.
+
+### Export
+
+The **Export** button offers SVG and PNG at 1× or 2×, with an optional
+transparent background. It is disabled while the canvas is empty.
+
+- **SVG** is a standalone file with an embedded stylesheet — it opens correctly
+  with no access to the app.
+- **PNG** is that same SVG rasterised through a `<canvas>`, so the two can
+  never drift.
+- The frame fits the **content** plus a margin, never the current viewport:
+  where your camera happened to be is not part of the diagram, and two people
+  exporting the same diagram get the same file.
+- Editing furniture — grid, selection outlines, resize handles, ports, group
+  boxes, the marquee, the drag preview — is absent, because the export is built
+  from the document rather than scraped from the screen.
+- The background is **opaque by default**. A transparent PNG of a dark-theme
+  diagram is pale strokes on nothing, and dropped into a white document it is
+  invisible; the option is there when you want it for compositing.
+- Exporting is not an edit. It creates no undo entry and changes nothing.
+
+### Saving
+
+The diagram saves itself to **IndexedDB** about half a second after you stop
+editing, and comes back when you reload. The toolbar's right-hand corner says
+what state that is in; **Clear** forgets the saved data and empties the canvas,
+after asking.
+
+What is saved:
+
+| Saved                                | Not saved                  |
+| ------------------------------------ | -------------------------- |
+| Blocks, connections, groups          | Undo history               |
+| Theme, snap setting, camera position | Clipboard, selection, tool |
+
+The document and the UI preferences live under separate keys. A diagram is
+content — it is what an export produces and what would be handed to someone
+else; a viewport is where one person's camera was on one machine. Keeping them
+apart means a camera stuck at 4× in an empty corner can be cleared without
+touching a single block.
+
+Storage can fail — a private window, a full disk, a denied permission. When it
+does the editor keeps working exactly as before and the corner reads **Not
+saved** with the reason on hover. Nothing blocks, nothing retries, and no work
+is lost that was not already only in memory.
+
 ### View
 
 | Action     | Input                                                  |
@@ -333,6 +398,25 @@ Resizing a group is out of scope: handles still appear only for a single block.
 - **The merge policy is generic.** Phase 4 grew it inside `createMoveCommand`; Phase 5's colour picker needed the same thing, so it lives in [src/history/merge.ts](src/history/merge.ts) now. The split is deliberate: the module owns _whether_ two commands may fold together (same kind, same key, inside the window), and the command owns _what the folded command is_ — a helper cannot know that a move keeps the first `before` and the last `after`.
 - `ElementPlacements` took a **third element kind** without changing shape. `spliceInOrder` and `capturePlacements` were already written against "an id, an index and an order list" rather than against blocks specifically, so groups cost one more field and one more loop. Removal stays silent about groups on purpose: `removeBlocks` already prunes and dissolves, and a placement set always holds either all of a group's members or some of them, so an explicit `removeGroups` there would wipe a group that only lost one member.
 
+- **One palette table, and the stylesheet is generated from it.** Phase 5 left `index.css` declaring `--block-fill: #232833` and `utils/style.ts` declaring the same hex in `DEFAULT_BLOCK_STYLE` — two hand-kept copies of one fact, which a second theme breaks outright: the panel would show one theme's colours while the canvas painted the other's, and the mixed-value detection compares _resolved_ values, so it would answer differently depending on which stylesheet was loaded. [src/theme/tokens.ts](src/theme/tokens.ts) is now the only place a colour is written down, and [src/theme/stylesheet.ts](src/theme/stylesheet.ts) emits the custom properties from it. The other direction — CSS authoritative, values read back through `getComputedStyle` — was rejected because `strokeWidth` and `fontSize` are numbers rather than colours (a unit typo becomes `NaN` at render time instead of a type error at build time), and because jsdom has no cascade to read them out of, so every unit test would have needed a stub that is a second table wearing a different hat.
+- Switching theme is **one attribute on `<html>`**. No component re-renders to change colour, no element is rewritten, and nothing in the document is touched — which is exactly why a theme switch cannot trigger the auto-save.
+- Style defaults are a **function of the theme**, threaded in as an argument rather than looked up. "What does unstyled look like" now has two answers, and the panel's mixed-value detection genuinely depends on which: a block explicitly painted the dark default sits beside an unstyled one, and the two agree in dark and differ in light.
+- The persisted document **mirrors the store's own slice**, maps and order lists and all, rather than flattening to arrays in paint order. Arrays are the tidier file and cannot contradict themselves, and that was the argument against them: they would have to be _reconstructed_ into maps and orders on every load, which is a transformation applied to the user's document every time the app opens. Mirroring makes `toDocument`/`fromDocument` a rename, so the round trip is the identity by construction. The redundancy is real — and it is why the validator checks it.
+- **Persisted data is external data.** A load is the one door into the store that does not come from a command, so it is the one door that checks. The policy is two-sided: a value of the wrong _shape_ (not an object, no version, `blocks` as an array, a version from the future) is refused whole and the editor opens empty, because there is nothing to salvage that would not be invented; a document of the right shape whose _references_ do not hold up is **repaired** — orphaned arrows dropped, dead group members pruned, groups below two dissolved, a block claimed by two groups left with the first, order lists rebuilt. That is not leniency: it is precisely what `removeBlocks` and `pruneGroups` would have done in a running editor, so the repair reproduces the editor's own cascade rather than inventing a second, laxer notion of soundness. Every repair is reported rather than performed silently.
+- A **version field from the very first save**, with the migration chain in place while it is still empty. The day a version 2 exists, every document on disk is a version 1 and a path invented at that point has to be right first time against data nobody can reproduce; a path that has been there and tested from the beginning only has to be populated. The walk owns the version counter, so a migration that forgets to bump it cannot loop. A document from the _future_ is refused rather than read with older rules — doing otherwise drops fields this build has never heard of and then saves the loss back over the original.
+- **Preferences are a separate record with the opposite policy**: read field by field, never refused. Every field there has an obvious default, so rejecting the record would cost a user their theme over a bad boolean. A document has no such default, which is why that one is refused whole.
+- The auto-save watches the **six document slices by reference** and nothing else. That is structural rather than a list of exceptions: selecting, panning, zooming, switching tool and switching theme cannot trigger a document write, because none of them replaces any of those references. Preferences ride their own debounce, so a pan writes a preferences record and never a document.
+- `changed()` **carries no payload**; the snapshot is taken when the write happens. A drag reports a change on every pointer frame, and handing a document to the debouncer per frame would deep-copy the whole diagram sixty times a second to throw away fifty-nine of the copies.
+- The debounce has a **ceiling as well as a quiet period**. A long editing session is a continuous stream of changes, and a debounce that only ever restarts its timer would keep postponing the write for as long as the user kept working.
+- **Storage is injectable, and IndexedDB is verified in Chrome.** jsdom has none, and `fake-indexeddb` is a polyfill several times the size of everything in [src/persistence/](src/persistence/) — installed so unit tests could exercise an API the browser harness already exercises for real. Three keys of async get/put/delete is the whole surface, so the seam goes there: serialising, validating, migrating and debouncing are tested against an in-memory driver, and the real driver is checked in a real browser.
+- **Storage failing is not an error the user has to clear.** The editor is a complete program without it, so a private window degrades to an in-memory session, a quiet "Not saved" in the corner and nothing else. Every write rejection is caught and swallowed; none of them reaches a caller.
+- The undo history is **deliberately not persisted**. Its commands captured `revert` against a document that is gone the moment the tab closes, so a redo replayed after a reload is exactly the branch the history layer already refuses in memory — and offering to undo an edit made in a session the user cannot remember is a strange thing to offer.
+- The export is **built from the document, not scraped from the DOM**. Cloning the live `<svg>` and stripping the chrome out of it is the obvious implementation and fails three ways: it exports only what is on screen (Phase 7's virtualisation would silently produce a partial diagram, and nothing about that failure looks like one); "remove the grid, the marquee, the ports, the handles…" is a list to be kept in step with every future affordance; and it needs a rendered app, where a pure function of the document can be tested exhaustively. Nothing is duplicated: the routing, the style resolution and the marker-id scheme are the same functions the canvas draws with.
+- Exported styles travel as an **embedded `<style>` rather than inlined onto every element**. A loose `.svg` has no access to the app's stylesheet, so the class-based defaults have to become concrete somewhere — but inlining them would flatten "unstyled" into "explicitly this colour", which is a different document and no longer re-themable by hand. Per-element overrides keep working exactly as they do in the app, because they are inline styles and inline beats a class. `vector-effect: non-scaling-stroke` is the one thing deliberately not carried over: on the canvas it keeps a border one screen pixel wide at any zoom, which is an editing affordance; in a file it would make borders thin out as the image is scaled up.
+- The export frames on **content plus a margin**, and `contentBounds` walks the routed connection points as well as the blocks. An orthogonal route can swing clear of both boxes it joins, and framing on the blocks alone would clip exactly those arrows.
+- An **empty diagram exports nothing at all** — `exportSvg` returns `null` and the toolbar disables the button. A blank file and a zero-sized one are both worse in the same way: they look like a successful export and open as a blank page, which is indistinguishable from a bug that ate the diagram.
+- The PNG is the **exported SVG rasterised**, not a second renderer, so the two cannot drift. There is no `foreignObject` anywhere in the document — the text-input overlay is HTML but is not part of the diagram — which removes the usual silent-failure mode; and a failure to rasterise rejects with a message rather than saving a blank image, because a PNG that is quietly the wrong picture is found out after it has been sent to someone.
+
 ## Status
 
 In active development. Built in phases:
@@ -342,7 +426,7 @@ In active development. Built in phases:
 3. ✅ Connections between blocks, snap-to-grid
 4. ✅ Undo/redo (command pattern), keyboard shortcuts
 5. ✅ Element styling, grouping
-6. ⬜ PNG/SVG export, IndexedDB auto-save, dark/light themes
+6. ✅ PNG/SVG export, IndexedDB auto-save, dark/light themes
 7. ⬜ Performance, Playwright E2E, deploy
 
 Screenshots and a demo GIF land in Phase 7.

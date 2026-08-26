@@ -6,7 +6,7 @@ import { clearClipboard } from '../store/clipboard'
 import { useDiagramStore } from '../store/diagramStore'
 import type { Block } from '../types'
 import { DEFAULT_VIEWPORT } from '../utils/coords'
-import { DEFAULT_BLOCK_STYLE } from '../utils/style'
+import { defaultBlockStyle } from '../utils/style'
 
 /*
  * Styling and grouping as the user meets them: a real panel, real clicks, real
@@ -387,7 +387,7 @@ describe('the mixed state', () => {
     select(required(a, 'a').id, required(b, 'b').id)
 
     expect(screen.queryByTestId('mixed-indicator')).toBeNull()
-    expect(picker('picker-fill').value).toBe(DEFAULT_BLOCK_STYLE.fill)
+    expect(picker('picker-fill').value).toBe(defaultBlockStyle('dark').fill)
   })
 
   it('applies one value to all of a divergent selection when asked', () => {

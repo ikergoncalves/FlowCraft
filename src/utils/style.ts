@@ -1,43 +1,55 @@
+import { STYLE_METRICS, THEMES, type ThemeName } from '../theme/tokens'
 import type { BlockStyle, ConnectionStyle } from '../types'
 
 /**
  * Style resolution, and the two jobs it has to keep apart.
  *
  * **Rendering** must emit nothing for a field the document does not set, so an
- * unstyled block keeps taking its colours from `index.css` — that is what lets
- * Phase 6 swap a theme by editing custom properties instead of rewriting every
- * block in the document. `blockStyleAttributes` therefore returns a *sparse*
- * prop object.
+ * unstyled block keeps taking its colours from the stylesheet — that is what
+ * lets a theme swap repaint it by changing custom properties instead of
+ * rewriting every block in the document. `blockShapeStyle` therefore returns a
+ * *sparse* prop object.
  *
  * **The panel** needs a concrete value to put in a colour swatch or a number
  * box, because there is no such thing as an empty `<input type="color">`.
- * `resolveBlockStyle` fills the gaps from the tables below.
+ * `resolveBlockStyle` fills the gaps.
  *
- * The two must never be confused. Resolving at render time would bake today's
- * palette into every block the moment anyone opened the panel.
+ * The two must never be confused. Resolving at render time would bake the
+ * active theme's palette into every block the moment anyone opened the panel —
+ * and with two themes that is not a hypothetical: it would freeze whichever
+ * theme happened to be on.
+ *
+ * **Where the defaults come from.** Not from a table here. Phase 5 kept one,
+ * transcribed by hand from `index.css`, and Phase 6 deleted it: the defaults
+ * are now derived from `theme/tokens.ts`, the same table the stylesheet is
+ * generated from, so the panel and the canvas cannot disagree about what
+ * "unstyled" looks like. That also makes the defaults a *function of the
+ * theme* rather than a constant, which is why every resolver below takes them
+ * as an argument instead of reaching for a module-level value.
  */
 
-/**
- * What the stylesheet paints when the document says nothing.
- *
- * These mirror the custom properties in `index.css` and exist only so the
- * panel can show the user what they are about to change. Nothing writes them
- * into a block: a block whose fill is set to exactly this value still carries
- * an explicit `fill`, and that is the honest record of what the user did.
- */
-export const DEFAULT_BLOCK_STYLE: Required<BlockStyle> = {
-  fill: '#232833',
-  stroke: '#3b4351',
-  strokeWidth: 1,
-  fontSize: 14,
-  textColor: '#e7eaf0',
+/** What the stylesheet paints for a block when the document says nothing. */
+export function defaultBlockStyle(theme: ThemeName): Required<BlockStyle> {
+  const tokens = THEMES[theme]
+  return {
+    fill: tokens.blockFill,
+    stroke: tokens.blockStroke,
+    strokeWidth: STYLE_METRICS.blockStrokeWidth,
+    fontSize: STYLE_METRICS.blockFontSize,
+    // The label takes the theme's ordinary text colour; it has no token of its
+    // own, because a block's label reading differently from the toolbar would
+    // be a bug rather than a feature.
+    textColor: tokens.text,
+  }
 }
 
-/** `DEFAULT_BLOCK_STYLE` for arrows, mirroring `.connection__line`. */
-export const DEFAULT_CONNECTION_STYLE: Required<ConnectionStyle> = {
-  stroke: '#7d8798',
-  strokeWidth: 1.75,
-  dashed: false,
+/** `defaultBlockStyle` for arrows. */
+export function defaultConnectionStyle(theme: ThemeName): Required<ConnectionStyle> {
+  return {
+    stroke: THEMES[theme].connection,
+    strokeWidth: STYLE_METRICS.connectionStrokeWidth,
+    dashed: false,
+  }
 }
 
 /**
@@ -53,16 +65,20 @@ function defined<T extends object>(style: T): Partial<T> {
   ) as Partial<T>
 }
 
-/** A block's style with every gap filled from the defaults, for display. */
-export function resolveBlockStyle(style?: BlockStyle): Required<BlockStyle> {
-  return { ...DEFAULT_BLOCK_STYLE, ...(style ? defined(style) : {}) }
+/** A block's style with every gap filled from `defaults`, for display. */
+export function resolveBlockStyle(
+  style: BlockStyle | undefined,
+  defaults: Required<BlockStyle>,
+): Required<BlockStyle> {
+  return { ...defaults, ...(style ? defined(style) : {}) }
 }
 
 /** `resolveBlockStyle` for arrows. */
 export function resolveConnectionStyle(
-  style?: ConnectionStyle,
+  style: ConnectionStyle | undefined,
+  defaults: Required<ConnectionStyle>,
 ): Required<ConnectionStyle> {
-  return { ...DEFAULT_CONNECTION_STYLE, ...(style ? defined(style) : {}) }
+  return { ...defaults, ...(style ? defined(style) : {}) }
 }
 
 /**
@@ -95,20 +111,30 @@ export function isMixed<T>(value: Shared<T>): value is typeof MIXED {
   return value === MIXED
 }
 
-/** The shared value of one resolved field across a selection of blocks. */
+/**
+ * The shared value of one resolved field across a selection of blocks.
+ *
+ * `defaults` is threaded in rather than looked up because the answer genuinely
+ * depends on the theme: two unstyled blocks agree on "the default fill", and
+ * *which* colour that is changes when the theme does.
+ */
 export function sharedBlockField<K extends keyof BlockStyle>(
   styles: readonly (BlockStyle | undefined)[],
   field: K,
+  defaults: Required<BlockStyle>,
 ): Shared<Required<BlockStyle>[K]> {
-  return sharedValue(styles.map((style) => resolveBlockStyle(style)[field]))
+  return sharedValue(styles.map((style) => resolveBlockStyle(style, defaults)[field]))
 }
 
 /** `sharedBlockField` for arrows. */
 export function sharedConnectionField<K extends keyof ConnectionStyle>(
   styles: readonly (ConnectionStyle | undefined)[],
   field: K,
+  defaults: Required<ConnectionStyle>,
 ): Shared<Required<ConnectionStyle>[K]> {
-  return sharedValue(styles.map((style) => resolveConnectionStyle(style)[field]))
+  return sharedValue(
+    styles.map((style) => resolveConnectionStyle(style, defaults)[field]),
+  )
 }
 
 /**
@@ -124,8 +150,8 @@ export function sharedConnectionField<K extends keyof ConnectionStyle>(
  * `getComputedStyle` in a real renderer disagreed.
  *
  * Inline style wins that fight while staying per-property, so an unset field
- * still falls through to the class — which is what keeps Phase 6's themes able
- * to repaint an unstyled block, and leaves `vector-effect` where it belongs.
+ * still falls through to the class — which is what keeps a theme able to
+ * repaint an unstyled block, and leaves `vector-effect` where it belongs.
  */
 export function blockShapeStyle(style?: BlockStyle): {
   fill?: string
@@ -145,7 +171,7 @@ export function blockShapeStyle(style?: BlockStyle): {
  *
  * `fontSize` is a bare number, which React renders as `px` — and inside an SVG
  * one CSS pixel is one user unit, so the size stays in world space and scales
- * with the zoom exactly as the base `font-size` attribute does.
+ * with the zoom exactly as the class's `font-size` does.
  */
 export function blockTextStyle(style?: BlockStyle): {
   fill?: string
@@ -159,11 +185,12 @@ export function blockTextStyle(style?: BlockStyle): {
  * A dash pattern proportional to the stroke, or `undefined` for a solid line.
  *
  * Derived from the width rather than fixed, so a 6-unit arrow does not read as
- * a solid line with faint notches in it.
+ * a solid line with faint notches in it. The fallback width is the metric, not
+ * a theme lookup: dash geometry has no colour in it.
  */
 export function connectionDashArray(style?: ConnectionStyle): string | undefined {
   if (!style?.dashed) return undefined
-  const width = style.strokeWidth ?? DEFAULT_CONNECTION_STYLE.strokeWidth
+  const width = style.strokeWidth ?? STYLE_METRICS.connectionStrokeWidth
   return `${width * 3} ${width * 2}`
 }
 

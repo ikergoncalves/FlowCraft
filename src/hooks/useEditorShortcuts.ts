@@ -10,6 +10,7 @@ import {
 } from '../history/actions'
 import { useHistoryStore } from '../history/historyStore'
 import { useDiagramStore } from '../store/diagramStore'
+import { useThemeStore } from '../theme/themeStore'
 import type { Point, Tool } from '../types'
 import { GRID_SIZE } from '../utils/coords'
 
@@ -112,6 +113,7 @@ function handleAccelerator(event: KeyboardEvent): boolean {
  * | ------------------------ | ----------------------------------------- |
  * | `V` / `R` / `T`          | pick a tool                               |
  * | `G`                      | toggle snapping                           |
+ * | `L`                      | switch between the light and dark themes  |
  * | `Delete` / `Backspace`   | delete the selection                      |
  * | `Escape`                 | clear the selection                       |
  * | `0`                      | reset the view                            |
@@ -172,6 +174,15 @@ export function useEditorShortcuts(): void {
       if (event.key.toLowerCase() === 'g') {
         event.preventDefault()
         toggleSnapToGrid()
+        return
+      }
+
+      // `L` for light/dark. Unmodified, like the other toggles: Ctrl+L is the
+      // browser's address bar and Ctrl+Shift+L is taken by extensions often
+      // enough that claiming either would be a fight over someone else's key.
+      if (event.key.toLowerCase() === 'l') {
+        event.preventDefault()
+        useThemeStore.getState().toggleTheme()
         return
       }
 

@@ -1,27 +1,24 @@
 /*
- * Colours live in custom properties so Phase 6's dark/light themes have a
- * single place to swap. Per-element overrides from the properties panel are
- * SVG attributes rather than rules here, and only for the fields a user has
- * actually set — an unstyled block still paints entirely off these classes,
- * which is what keeps a theme swap able to reach it.
+ * Every colour in this file comes from a custom property, and not one of them
+ * is declared here.
+ *
+ * The declarations are generated from `src/theme/tokens.ts` and installed as
+ * a `<style>` element at startup — see `theme/stylesheet.ts` for why that
+ * direction and not the other. Switching theme is one `data-theme` attribute
+ * on `<html>`; every rule below is written once and repaints itself.
+ *
+ * Per-element overrides from the properties panel are inline styles rather
+ * than rules here, and only for the fields a user has actually set, so an
+ * unstyled block still paints entirely off these classes — which is exactly
+ * what lets a theme swap reach it.
  */
 :root {
-  --surface: #14161a;
-  --surface-raised: #1c1f26;
-  --border: #2c313b;
-  --text: #e7eaf0;
-  --text-muted: #97a0b0;
-  --accent: #4c8dff;
-  --grid-dot: #333a47;
-  --block-fill: #232833;
-  --block-stroke: #3b4351;
-  --selection-bounds: #6f7d94;
-  --group: #a9b6cc;
-  --connection: #7d8798;
-  --connection-selected: #4c8dff;
-  --port: #4c8dff;
+  /* Before the generated sheet lands, this is what tells the browser which way
+   * to paint its own furniture — including the page canvas behind an empty
+   * body, which is the only thing painted before React mounts. Without it a
+   * dark theme opens on a white flash. */
+  color-scheme: light dark;
 
-  color-scheme: dark;
   font-family:
     system-ui,
     -apple-system,
@@ -89,7 +86,7 @@ body,
 
 .toolbar__button:hover {
   color: var(--text);
-  background: rgb(255 255 255 / 6%);
+  background: var(--hover);
 }
 
 .toolbar__button:disabled {
@@ -101,7 +98,7 @@ body,
 
 .toolbar__button[aria-pressed='true'] {
   color: var(--text);
-  background: rgb(76 141 255 / 18%);
+  background: var(--accent-soft);
   border-color: var(--accent);
 }
 
@@ -116,7 +113,7 @@ body,
   font-family: inherit;
   font-size: 11px;
   color: var(--text-muted);
-  background: rgb(255 255 255 / 8%);
+  background: var(--wash);
   border-radius: 4px;
 }
 
@@ -142,12 +139,13 @@ body,
 .block__shape {
   fill: var(--block-fill);
   stroke: var(--block-stroke);
-  stroke-width: 1;
+  stroke-width: var(--block-stroke-width);
   vector-effect: non-scaling-stroke;
 }
 
 .block__text {
   fill: var(--text);
+  font-size: var(--block-font-size);
   user-select: none;
 }
 
@@ -172,7 +170,7 @@ body,
 
 .connection__line {
   stroke: var(--connection);
-  stroke-width: 1.75;
+  stroke-width: var(--connection-stroke-width);
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -238,7 +236,7 @@ body,
 /* Selection chrome ------------------------------------------------------- */
 
 .marquee {
-  fill: rgb(76 141 255 / 12%);
+  fill: var(--marquee-fill);
   stroke: var(--accent);
   stroke-width: 1;
   stroke-dasharray: 4 3;
@@ -283,7 +281,7 @@ body,
   padding: 4px 6px 4px 10px;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
-  background: rgb(28 31 38 / 88%);
+  background: var(--overlay);
   border: 1px solid var(--border);
   border-radius: 8px;
   user-select: none;
@@ -341,7 +339,7 @@ body,
   max-height: calc(100% - 68px);
   padding: 12px;
   overflow-y: auto;
-  background: rgb(28 31 38 / 94%);
+  background: var(--overlay);
   border: 1px solid var(--border);
   border-radius: 10px;
   user-select: none;
@@ -384,7 +382,7 @@ body,
   padding: 0 5px;
   font-size: 10px;
   color: var(--text);
-  background: rgb(255 255 255 / 10%);
+  background: var(--wash);
   border-radius: 4px;
 }
 

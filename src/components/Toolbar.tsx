@@ -1,5 +1,6 @@
 import { redoLabel, undoLabel, useHistoryStore } from '../history/historyStore'
 import { useDiagramStore } from '../store/diagramStore'
+import { useThemeStore } from '../theme/themeStore'
 import type { Tool } from '../types'
 
 interface ToolSpec {
@@ -30,10 +31,15 @@ export function Toolbar() {
   const snapToGrid = useDiagramStore((state) => state.snapToGrid)
   const toggleSnapToGrid = useDiagramStore((state) => state.toggleSnapToGrid)
 
+  const theme = useThemeStore((state) => state.theme)
+  const toggleTheme = useThemeStore((state) => state.toggleTheme)
+
   const undo = useHistoryStore((state) => state.undo)
   const redo = useHistoryStore((state) => state.redo)
   const nextUndo = useHistoryStore(undoLabel)
   const nextRedo = useHistoryStore(redoLabel)
+
+  const otherTheme = theme === 'dark' ? 'light' : 'dark'
 
   return (
     <div className="toolbar" role="toolbar" aria-label="Tools">
@@ -95,6 +101,22 @@ export function Toolbar() {
         >
           Snap
           <kbd className="toolbar__kbd">G</kbd>
+        </button>
+
+        {/* Labelled with the theme it switches *to*, not the one in force: a
+            toggle that names its current state reads as a claim, and the user
+            can already see which theme they are looking at. */}
+        <button
+          type="button"
+          className="toolbar__button"
+          data-testid="theme-toggle"
+          data-theme-target={otherTheme}
+          title={`Switch to the ${otherTheme} theme (L)`}
+          aria-label={`Switch to the ${otherTheme} theme`}
+          onClick={toggleTheme}
+        >
+          {otherTheme === 'light' ? 'Light' : 'Dark'}
+          <kbd className="toolbar__kbd">L</kbd>
         </button>
       </div>
     </div>

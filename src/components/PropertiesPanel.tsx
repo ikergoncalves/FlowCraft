@@ -1,8 +1,11 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useMemo, useRef } from 'react'
 import { styleBlocks, styleConnections } from '../history/actions'
 import { useBlockList, useConnectionList, useDiagramStore } from '../store/diagramStore'
+import { useThemeStore } from '../theme/themeStore'
 import type { BlockStyle, ConnectionStyle } from '../types'
 import {
+  defaultBlockStyle,
+  defaultConnectionStyle,
   isMixed,
   sharedBlockField,
   sharedConnectionField,
@@ -197,6 +200,18 @@ export function PropertiesPanel() {
   const blocks = useBlockList()
   const connections = useConnectionList()
 
+  /*
+   * The defaults the panel displays follow the theme, because they *are* the
+   * theme: an unstyled block shows the active palette's fill, and the mixed
+   * indicator compares resolved values, so under the wrong defaults two
+   * unstyled blocks could read as disagreeing. Memoised per theme rather than
+   * recomputed per field — five fields times N selected elements is a lot of
+   * identical object literals otherwise.
+   */
+  const theme = useThemeStore((state) => state.theme)
+  const blockDefaults = useMemo(() => defaultBlockStyle(theme), [theme])
+  const connectionDefaults = useMemo(() => defaultConnectionStyle(theme), [theme])
+
   const selectedBlockSet = new Set(selectedIds)
   const blockStyles = blocks
     .filter((block) => selectedBlockSet.has(block.id))
@@ -235,28 +250,28 @@ export function PropertiesPanel() {
 
           <SwatchRow
             label="Fill"
-            value={sharedBlockField(blockStyles, 'fill')}
+            value={sharedBlockField(blockStyles, 'fill', blockDefaults)}
             onPick={(fill) => {
               patchBlocks({ fill }, 'fill', 'fill')
             }}
           />
           <SwatchRow
             label="Border"
-            value={sharedBlockField(blockStyles, 'stroke')}
+            value={sharedBlockField(blockStyles, 'stroke', blockDefaults)}
             onPick={(stroke) => {
               patchBlocks({ stroke }, 'stroke', 'border colour')
             }}
           />
           <SwatchRow
             label="Text"
-            value={sharedBlockField(blockStyles, 'textColor')}
+            value={sharedBlockField(blockStyles, 'textColor', blockDefaults)}
             onPick={(textColor) => {
               patchBlocks({ textColor }, 'textColor', 'text colour')
             }}
           />
           <NumberField
             label="Border width"
-            value={sharedBlockField(blockStyles, 'strokeWidth')}
+            value={sharedBlockField(blockStyles, 'strokeWidth', blockDefaults)}
             min={0}
             max={12}
             step={0.5}
@@ -266,7 +281,7 @@ export function PropertiesPanel() {
           />
           <NumberField
             label="Text size"
-            value={sharedBlockField(blockStyles, 'fontSize')}
+            value={sharedBlockField(blockStyles, 'fontSize', blockDefaults)}
             min={6}
             max={96}
             step={1}
@@ -287,14 +302,18 @@ export function PropertiesPanel() {
 
           <SwatchRow
             label="Line"
-            value={sharedConnectionField(connectionStyles, 'stroke')}
+            value={sharedConnectionField(connectionStyles, 'stroke', connectionDefaults)}
             onPick={(stroke) => {
               patchConnections({ stroke }, 'stroke', 'line colour')
             }}
           />
           <NumberField
             label="Line width"
-            value={sharedConnectionField(connectionStyles, 'strokeWidth')}
+            value={sharedConnectionField(
+              connectionStyles,
+              'strokeWidth',
+              connectionDefaults,
+            )}
             min={0.5}
             max={12}
             step={0.25}
@@ -304,7 +323,7 @@ export function PropertiesPanel() {
           />
           <CheckField
             label="Dashed"
-            value={sharedConnectionField(connectionStyles, 'dashed')}
+            value={sharedConnectionField(connectionStyles, 'dashed', connectionDefaults)}
             onCommit={(dashed) => {
               patchConnections({ dashed }, 'dashed', 'dashes')
             }}

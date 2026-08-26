@@ -2,15 +2,6 @@ import { memo } from 'react'
 import type { Block } from '../types'
 import { blockShapeStyle, blockTextStyle } from '../utils/style'
 
-/**
- * World-unit font size when a block does not override it.
- *
- * Still a literal here rather than a CSS rule because `<text>` needs a real
- * `font-size` attribute for the label to be measured and centred at all; every
- * *colour* default stays in the stylesheet.
- */
-const FONT_SIZE = 14
-
 interface BlockViewProps {
   block: Block
   selected: boolean
@@ -70,11 +61,18 @@ function BlockViewImpl({ block, selected, onActivate }: BlockViewProps) {
         />
       )}
 
+      {/*
+        No `font-size` attribute: the default lives in `.block__text` as
+        `var(--block-font-size)`, generated from the same metric the properties
+        panel resolves against. An attribute here would be dead weight anyway —
+        it sits at the bottom of the SVG cascade and the class already beats it
+        — but a dead value that *looks* authoritative is the exact shape of the
+        duplication Phase 6 set out to remove.
+      */}
       <text
         className="block__text"
         x={centerX}
         y={centerY}
-        fontSize={FONT_SIZE}
         textAnchor="middle"
         dominantBaseline="central"
         style={blockTextStyle(block.style)}

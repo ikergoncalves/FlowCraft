@@ -688,6 +688,192 @@ async function main() {
     )
 
     /*
+     * Phase 6 — export.
+     *
+     * The SVG is a pure function of the document and is tested exhaustively in
+     * `src/export/svg.test.ts`; what cannot be tested there is rasterising,
+     * because jsdom ships no canvas and no image decoder. So the checks below
+     * run the exporter in the page and then answer the two questions a unit
+     * test structurally cannot: does a real browser *decode* this markup, and
+     * is the PNG it produces an actual picture rather than a blank rectangle.
+     *
+     * The blank-PNG case is the one that matters. A canvas that fails to draw
+     * still hands back a perfectly valid, correctly-sized, entirely empty PNG,
+     * and nothing short of reading the pixels can tell the difference.
+     */
+    console.log('\nExport')
+    await page.press('a', MODIFIER.ctrl)
+    await page.press('Delete')
+    await page.press('r')
+    await page.click(canvas.left + 260, canvas.top + 200)
+    await page.press('r')
+    await page.click(canvas.left + 640, canvas.top + 380)
+    current = await blocks()
+
+    // An arrow, so the export has a marker to carry.
+    await page.mouse('mouseMoved', centerOf(current[0]))
+    await page.settle()
+    const exportPort = await page.evaluate(`
+      const node = document.querySelector('[data-port-side="e"][data-port-block="${current[0].id}"] circle')
+      if (!node) return null
+      return { x: Number(node.getAttribute('cx')), y: Number(node.getAttribute('cy')) }
+    `)
+    if (exportPort) {
+      await page.drag(screen(exportPort.x, exportPort.y), centerOf(current[1]), {
+        steps: 16,
+      })
+    }
+    check.equal('a diagram to export', (await connections()).length, 1)
+
+    // Reach into the app's own exporter through the dev server's module graph:
+    // this is the very function the toolbar calls, not a re-implementation.
+    const exported = await page.evaluate(`
+      return (async () => {
+        const [{ exportSvg }, { renderPng }] = await Promise.all([
+          import('/src/export/svg.ts'),
+          import('/src/export/png.ts'),
+        ])
+        const { useDiagramStore } = await import('/src/store/diagramStore.ts')
+        const { useThemeStore } = await import('/src/theme/themeStore.ts')
+
+        const theme = useThemeStore.getState().theme
+        const svg = exportSvg(useDiagramStore.getState(), { theme })
+        if (!svg) return { svg: null }
+
+        const blob = await renderPng(svg, { scale: 2, background: '#ffffff' })
+        const bitmap = await createImageBitmap(blob)
+        const probe = document.createElement('canvas')
+        probe.width = bitmap.width
+        probe.height = bitmap.height
+        const context = probe.getContext('2d')
+        context.drawImage(bitmap, 0, 0)
+        const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height)
+
+        // How many distinct colours the rasteriser actually put down. A blank
+        // canvas has exactly one; a drawing has several.
+        const colours = new Set()
+        let opaque = 0
+        for (let at = 0; at < data.length; at += 4) {
+          if (data[at + 3] > 0) opaque += 1
+          // Capped, not broken out of: the opacity tally has to see every
+          // pixel, and an anti-aliased drawing has thousands of shades.
+          if (colours.size <= 64) {
+            colours.add(data[at] + ',' + data[at + 1] + ',' + data[at + 2])
+          }
+        }
+
+        return {
+          svg: svg.markup,
+          width: svg.width,
+          height: svg.height,
+          pngBytes: blob.size,
+          pngType: blob.type,
+          pngWidth: bitmap.width,
+          pngHeight: bitmap.height,
+          distinctColours: colours.size,
+          opaquePixels: opaque,
+          totalPixels: data.length / 4,
+        }
+      })()
+    `)
+
+    check.ok('the exporter produced something', exported?.svg, 'export returned null')
+
+    // Well-formedness, judged by a real XML parser rather than by a regex.
+    const parsed = await page.evaluate(`
+      const markup = ${JSON.stringify(exported?.svg ?? '')}
+      const doc = new DOMParser().parseFromString(markup, 'image/svg+xml')
+      const failed = doc.querySelector('parsererror')
+      if (failed) return { ok: false, message: failed.textContent }
+      const ids = [...doc.querySelectorAll('marker')].map((node) => node.id)
+      const referenced = [...doc.querySelectorAll('[marker-end]')]
+        .map((node) => node.getAttribute('marker-end').slice(5, -1))
+      return {
+        ok: true,
+        root: doc.documentElement.tagName,
+        blocks: doc.querySelectorAll('.block__shape').length,
+        lines: doc.querySelectorAll('.connection__line').length,
+        markers: ids,
+        danglingMarkers: referenced.filter((id) => !ids.includes(id)),
+        chrome: /canvas__grid|marquee|selection__|connection__hit|connection__halo|data-block-id|__ghost/.test(markup),
+        hasStyleBlock: doc.querySelectorAll('style').length,
+      }
+    `)
+
+    check.equal('the exported SVG is well-formed', parsed?.ok, true)
+    check.equal('and its root is an svg', parsed?.root, 'svg')
+    check.equal('it carries both blocks', parsed?.blocks, 2)
+    check.equal('and the arrow', parsed?.lines, 1)
+    check.equal('it carries no editing chrome', parsed?.chrome, false)
+    check.equal('it embeds its stylesheet', parsed?.hasStyleBlock, 1)
+    check.ok(
+      'the marker the arrow points at is defined',
+      parsed && parsed.markers.length > 0 && parsed.danglingMarkers.length === 0,
+      `dangling: ${JSON.stringify(parsed?.danglingMarkers)}`,
+    )
+
+    console.log('\nRasterising')
+    check.ok(
+      'the PNG has bytes in it',
+      exported?.pngBytes > 1000,
+      `${exported?.pngBytes}B`,
+    )
+    check.equal('and is really a PNG', exported?.pngType, 'image/png')
+    check.equal('2x doubles the width', exported?.pngWidth, exported?.width * 2)
+    check.equal('2x doubles the height', exported?.pngHeight, exported?.height * 2)
+    check.equal(
+      'the background is opaque everywhere',
+      exported?.opaquePixels,
+      exported?.totalPixels,
+    )
+    // The check jsdom cannot make: this is not a correctly-sized blank image.
+    check.ok(
+      'the PNG is a drawing, not a blank rectangle',
+      exported?.distinctColours > 3,
+      `only ${exported?.distinctColours} distinct colours in the raster`,
+    )
+
+    console.log('\nThe export menu')
+    const canvasTopBefore = (await page.evaluate(READ_CANVAS_BOX)).top
+    const openExport = await page.evaluate(`
+      const box = document.querySelector('[data-testid="export-toggle"]').getBoundingClientRect()
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2, disabled: document.querySelector('[data-testid="export-toggle"]').disabled }
+    `)
+    check.equal(
+      'the export button is live with a diagram open',
+      openExport.disabled,
+      false,
+    )
+    await page.click(openExport.x, openExport.y)
+    const menu = await page.evaluate(`
+      const node = document.querySelector('[data-testid="export-menu"]')
+      if (!node) return null
+      const box = node.getBoundingClientRect()
+      const view = document.documentElement
+      return {
+        items: node.querySelectorAll('[role="menuitem"]').length,
+        insideViewport: box.right <= view.clientWidth + 0.5 && box.bottom <= view.clientHeight + 0.5,
+        reachesPastToolbar: box.bottom > document.querySelector('.toolbar').getBoundingClientRect().bottom,
+        canvasTop: document.querySelector('[data-testid="canvas"]').getBoundingClientRect().top,
+      }
+    `)
+    check.ok('it opens a menu', menu, 'no export menu rendered')
+    check.equal('offering SVG and both PNG scales', menu?.items, 3)
+    check.equal('drawn inside the window', menu?.insideViewport, true)
+    // Floating over the canvas rather than pushing it down: a menu that took
+    // part in the toolbar's flex row would move the diagram under the cursor.
+    check.equal('reaching down over the canvas', menu?.reachesPastToolbar, true)
+    check.close('without moving it', menu?.canvasTop, canvasTopBefore, 0.5)
+    await page.press('Escape')
+    check.ok(
+      'escape closes it',
+      !(await page.evaluate(
+        `return !!document.querySelector('[data-testid="export-menu"]')`,
+      )),
+      'the menu stayed open',
+    )
+
+    /*
      * Phase 6 — persistence.
      *
      * IndexedDB does not exist in jsdom, which is why the storage layer sits

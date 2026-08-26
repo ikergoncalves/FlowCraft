@@ -551,6 +551,64 @@ async function main() {
     check.equal('ctrl+shift+g dissolves the group', chrome?.groupBoxes, 0)
     check.equal('leaving an ordinary multi-selection', chrome?.selectionBoxes, 1)
     check.equal('with both blocks still there', (await blocks()).length, 3)
+
+    /*
+     * The narrow breakpoint, measured for the first time.
+     *
+     * `@media (width <= 560px)` was written in Phase 5 and never checked: this
+     * harness ran at 1280x900, where the rule does not apply, and jsdom
+     * evaluates no media queries at all. Everything below is a layout fact, so
+     * this is the only place in the repository that can assert any of it.
+     */
+    console.log('\nNarrow viewport (400x800)')
+    await page.resize(400, 800)
+    const narrowCanvas = await page.evaluate(READ_CANVAS_BOX)
+    const narrow = await page.evaluate(READ_PANEL)
+    check.ok('the panel is still rendered', narrow, 'no panel at 400px')
+    check.equal('it sits inside the viewport', narrow?.insideViewport, true)
+    check.ok(
+      'it spans the width as a bottom strip',
+      narrow && narrow.width > narrowCanvas.width * 0.8,
+      `panel is ${narrow?.width}px of a ${narrowCanvas.width}px canvas`,
+    )
+    check.ok(
+      'it is anchored to the bottom, not the top',
+      narrow && narrow.top > narrowCanvas.top + narrowCanvas.height / 2,
+      `panel top is ${narrow?.top} in a canvas from ${narrowCanvas.top}`,
+    )
+    check.ok(
+      'and still leaves most of the canvas uncovered',
+      narrow && narrow.height < narrowCanvas.height * 0.5,
+      `panel is ${narrow?.height}px tall over a ${narrowCanvas.height}px canvas`,
+    )
+    check.ok(
+      'nothing overflows the page sideways',
+      await page.evaluate(
+        `return document.documentElement.scrollWidth <= document.documentElement.clientWidth`,
+      ),
+      'the document scrolls horizontally at 400px',
+    )
+    check.ok(
+      'the zoom indicator is not buried under the panel',
+      await page.evaluate(`
+        const zoom = document.querySelector('.zoom-indicator').getBoundingClientRect()
+        const panel = document.querySelector('[data-testid="properties-panel"]').getBoundingClientRect()
+        return zoom.bottom <= panel.top || zoom.top >= panel.bottom
+      `),
+      'the zoom indicator overlaps the properties panel',
+    )
+    check.ok(
+      'every toolbar button is still reachable',
+      await page.evaluate(`
+        const bar = document.querySelector('.toolbar').getBoundingClientRect()
+        return [...document.querySelectorAll('.toolbar button')].every((node) => {
+          const box = node.getBoundingClientRect()
+          return box.width > 0 && box.left >= bar.left - 0.5 && box.right <= bar.right + 0.5
+        })
+      `),
+      'a toolbar button is clipped at 400px',
+    )
+    await page.resetSize()
   })
 
   const { passed, failures } = check.summary()

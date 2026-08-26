@@ -347,22 +347,6 @@ body,
   user-select: none;
 }
 
-/* Below ~560px the floating panel would cover most of the canvas, so it
- * becomes a strip across the bottom instead of a column down the side. */
-@media (width <= 560px) {
-  .properties {
-    top: auto;
-    right: 8px;
-    bottom: 8px;
-    left: 8px;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 8px 16px;
-    width: auto;
-    max-height: 45%;
-  }
-}
-
 .properties__section {
   display: flex;
   flex-direction: column;
@@ -463,4 +447,52 @@ body,
 .properties__check:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Narrow viewports ------------------------------------------------------- */
+
+/*
+ * One breakpoint, and everything that has to move at it in one place.
+ *
+ * Written in Phase 5 for the properties panel alone and never measured — the
+ * browser harness ran at 1280x900, which is exactly the width at which none of
+ * this applies. Phase 6 pointed the harness at 400x800 and found the panel
+ * rule sound but two neighbours of it not: the panel's bottom strip sits on
+ * top of the zoom indicator, and a toolbar that had grown a theme toggle and
+ * an export menu ran out of room. Both are fixed here rather than by shrinking
+ * the panel, which was the part that already worked.
+ */
+@media (width <= 560px) {
+  /* The floating panel would cover most of a narrow canvas, so it becomes a
+   * strip across the bottom instead of a column down the side. */
+  .properties {
+    top: auto;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    width: auto;
+    max-height: 45%;
+  }
+
+  /* Out from under that strip. Top-right is free: the panel has left it. */
+  .zoom-indicator {
+    top: 8px;
+    right: 8px;
+    bottom: auto;
+  }
+
+  /* Wrapping beats overflowing: every control stays reachable, and the rows
+   * cost less canvas than the keyboard hints and the wordmark they replace. */
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .toolbar__brand,
+  .toolbar__kbd {
+    display: none;
+  }
 }

@@ -187,6 +187,32 @@ export class Page {
   }
 
   /**
+   * Resizes the viewport the page believes it has.
+   *
+   * `Emulation.setDeviceMetricsOverride` rather than a new Chrome with a
+   * different `--window-size`: the override re-evaluates media queries and
+   * re-lays-out in place, so one session can measure the same DOM at 1280px
+   * and at 400px. `deviceScaleFactor: 0` means "leave it as the platform has
+   * it", which keeps client pixels equal to CSS pixels and the coordinates
+   * every other probe in this file uses unchanged.
+   */
+  async resize(width, height) {
+    await this.session.send('Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor: 0,
+      mobile: false,
+    })
+    await this.settle()
+  }
+
+  /** Hands the viewport back to the real window. */
+  async resetSize() {
+    await this.session.send('Emulation.clearDeviceMetricsOverride')
+    await this.settle()
+  }
+
+  /**
    * Presses and releases one key.
    *
    * Modified keys are sent as `rawKeyDown` with no `text`: Chrome only

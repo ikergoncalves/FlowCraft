@@ -1,16 +1,29 @@
 /**
- * A minimal Chrome DevTools Protocol harness.
+ * A minimal Chrome DevTools Protocol rig, for measuring and for capturing.
  *
- * Phase 3 measured the drag threshold's cursor lag by driving a real Chrome
- * over CDP, because jsdom implements no layout, no hit testing and no pointer
- * capture — the three things a gesture regression actually shows up in. That
- * script lived in a temp directory and had to be rewritten from memory every
- * time. This is the same capability, kept in the repository.
+ * **What it is now.** Phase 7 moved every correctness check this file used to
+ * back — all 148 of them — into Playwright specs under `e2e/`. What is left is
+ * the one job Playwright is the wrong tool for: driving a *production build*
+ * with a stopwatch running, and taking frames for the README. Both want
+ * something a test runner deliberately does not give you — a single long-lived
+ * page, no retries, no per-test isolation, and control over exactly which
+ * frame a number is taken on.
  *
- * It is deliberately *not* a test framework. Playwright arrives in Phase 7;
- * until then this is a few hundred lines with no dependencies beyond Node 24's
- * global `WebSocket` and Vite's own Node API, so that "did that gesture
- * regress in a real renderer?" is one `npm run verify:browser` away.
+ * **Why it was not deleted.** `measure-perf.mjs` needs to serve `dist/`, not
+ * the dev server: React's development build renders every component twice
+ * under StrictMode, so timing it would produce numbers about a program nobody
+ * runs. It also needs a script installed before the page's first byte, so a
+ * cold-load stopwatch is already running when the load begins. Neither fits
+ * the Playwright config, and both are about thirty lines here.
+ *
+ * **Why the checks were not left here as well.** Two harnesses covering the
+ * same behaviour means two places to update and one of them rotting quietly.
+ * The Playwright specs are strictly better at that job: they retry, isolate,
+ * trace, and can catch a download — which this rig never could, so the export
+ * check had to reach into the dev server's module graph instead of taking the
+ * file the user actually gets.
+ *
+ * No dependencies beyond Node's global `WebSocket` and Vite's own Node API.
  */
 
 import { spawn } from 'node:child_process'
@@ -464,40 +477,5 @@ export async function withBrowser(run, { serve = 'dev', onPage } = {}) {
     chrome.kill()
     await server.close()
     await rm(profile, { recursive: true, force: true }).catch(() => {})
-  }
-}
-
-/** A tiny assertion tally, so the script can report every check it ran. */
-export function createChecklist() {
-  const failures = []
-  let passed = 0
-
-  const record = (ok, name, detail) => {
-    if (ok) {
-      passed += 1
-      console.log(`  \u2713 ${name}`)
-    } else {
-      failures.push(`${name} — ${detail}`)
-      console.log(`  \u2717 ${name} — ${detail}`)
-    }
-    return ok
-  }
-
-  return {
-    ok: (name, condition, detail = 'expected true') =>
-      record(Boolean(condition), name, detail),
-    close: (name, actual, expected, tolerance = 0.5) =>
-      record(
-        typeof actual === 'number' && Math.abs(actual - expected) <= tolerance,
-        name,
-        `expected ${expected} \u00b1 ${tolerance}, got ${actual}`,
-      ),
-    equal: (name, actual, expected) =>
-      record(
-        actual === expected,
-        name,
-        `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
-      ),
-    summary: () => ({ passed, failures }),
   }
 }

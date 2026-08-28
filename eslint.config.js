@@ -6,7 +6,7 @@ import prettierConfig from 'eslint-config-prettier/flat'
 import globals from 'globals'
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage', 'node_modules'] },
+  { ignores: ['dist', 'coverage', 'node_modules', 'playwright-report', 'test-results'] },
 
   js.configs.recommended,
   tseslint.configs.recommendedTypeChecked,
@@ -55,6 +55,15 @@ export default tseslint.config(
     files: ['scripts/**/*.mjs'],
     extends: [tseslint.configs.disableTypeChecked],
     languageOptions: { globals: { ...globals.node, WebSocket: 'readonly' } },
+  },
+
+  // The end-to-end specs run in Node and drive a browser from outside it, so
+  // they get both sets of globals. `page.evaluate` callbacks are compiled
+  // against the DOM by Playwright's own types; the spec body around them is
+  // not, which is exactly the split `tsconfig.e2e.json` describes.
+  {
+    files: ['e2e/**/*.ts'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 
   // Config files are Node-side and are not covered by the app tsconfig's type

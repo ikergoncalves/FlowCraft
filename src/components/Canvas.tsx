@@ -170,8 +170,17 @@ export function Canvas() {
    * Inside a group, a second double-click edits the text as usual, so nothing
    * a grouped block could do before has become unreachable; it just takes one
    * more press, which is the same bargain every editor with groups makes.
+   *
+   * **`useCallback` with no dependencies, and it is load-bearing.** `BlockView`
+   * is `memo`'d, and this is the one prop it takes that is not a primitive or
+   * a store object; recreated on every canvas render it defeated the memo
+   * entirely, so a drag that moved one block re-rendered every block on the
+   * canvas. Phase 7 measured that: at 5000 blocks it was the difference
+   * between 30fps and 60fps. Everything the body reads is pulled through
+   * `getState()` at call time rather than closed over, which is what makes the
+   * empty dependency list correct rather than merely convenient.
    */
-  const handleBlockActivate = (id: string) => {
+  const handleBlockActivate = useCallback((id: string) => {
     const state = useDiagramStore.getState()
     const group = groupOf(state, id)
     const alreadyInside = state.selectedIds.length === 1 && state.selectedIds[0] === id
@@ -181,7 +190,7 @@ export function Canvas() {
       return
     }
     setEditingId(id)
-  }
+  }, [])
 
   const editingBlock =
     editingId === null ? undefined : blocks.find((b) => b.id === editingId)

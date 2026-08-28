@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { diagramFilename } from './download'
-import { PNG_SCALES, pngSize, renderPng } from './png'
+import {
+  MAX_PNG_AREA,
+  MAX_PNG_DIMENSION,
+  PNG_SCALES,
+  pngSize,
+  pngSizeError,
+  renderPng,
+} from './png'
 import type { SvgExport } from './svg'
 
 const svg = (width: number, height: number): SvgExport => ({
@@ -113,5 +120,50 @@ describe('diagramFilename', () => {
     const now = vi.spyOn(Date.prototype, 'getFullYear').mockReturnValue(2030)
     expect(diagramFilename('svg')).toContain('2030')
     now.mockRestore()
+  })
+})
+
+describe('the canvas size guard', () => {
+  const at = (width: number, height: number) => ({ width, height })
+
+  it('passes an ordinary diagram', () => {
+    expect(pngSizeError(at(1200, 800))).toBeNull()
+  })
+
+  it('passes a size sitting exactly on both limits', () => {
+    expect(pngSizeError(at(MAX_PNG_DIMENSION, 1))).toBeNull()
+    expect(
+      pngSizeError(at(MAX_PNG_DIMENSION, MAX_PNG_AREA / MAX_PNG_DIMENSION)),
+    ).toBeNull()
+  })
+
+  it('refuses a side one pixel past the limit', () => {
+    expect(pngSizeError(at(MAX_PNG_DIMENSION + 1, 10))).not.toBeNull()
+    expect(pngSizeError(at(10, MAX_PNG_DIMENSION + 1))).not.toBeNull()
+  })
+
+  it('refuses an area past the limit even when both sides fit', () => {
+    // 16000 x 16800 is under the per-side cap on both axes and far over the
+    // area cap. Checking only the sides would let this through.
+    const size = at(16000, 16800)
+    expect(size.width).toBeLessThanOrEqual(MAX_PNG_DIMENSION)
+    expect(size.width * size.height).toBeGreaterThan(MAX_PNG_AREA)
+    expect(pngSizeError(size)).not.toBeNull()
+  })
+
+  it('names the remedy rather than only the symptom', () => {
+    const message = pngSizeError(at(40000, 40000)) ?? ''
+    expect(message).toContain('40000')
+    expect(message).toContain('smaller scale')
+    expect(message).toContain('SVG')
+  })
+
+  it('stops renderPng before it asks for a canvas it cannot have', async () => {
+    // An oversized `canvas.width` does not throw; the canvas comes back
+    // unusable and `toBlob` returns null, which would surface as "The canvas
+    // produced no image" — true, and useless.
+    await expect(
+      renderPng(svg(20000, 20000), { scale: 2, background: null }),
+    ).rejects.toThrow(/browser canvas allows/)
   })
 })

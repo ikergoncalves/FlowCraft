@@ -1,6 +1,12 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { diagramFilename, downloadBlob, downloadText } from '../export/download'
-import { PNG_SCALES, pngSize, renderPng, type PngScale } from '../export/png'
+import {
+  PNG_SCALES,
+  pngSize,
+  pngSizeError,
+  renderPng,
+  type PngScale,
+} from '../export/png'
 import { exportSvg } from '../export/svg'
 import { useDiagramStore } from '../store/diagramStore'
 import { useThemeStore } from '../theme/themeStore'
@@ -143,29 +149,32 @@ export function ExportMenu() {
             </span>
           </button>
 
-          {PNG_SCALES.map((scale) => (
-            <button
-              key={scale}
-              type="button"
-              className="export__item"
-              data-testid={`export-png-${scale}x`}
-              role="menuitem"
-              disabled={busy}
-              onClick={() => {
-                void savePng(scale)
-              }}
-            >
-              {`PNG ${scale}×`}
-              <span className="export__hint">
-                {preview
-                  ? (() => {
-                      const size = pngSize(preview, scale)
-                      return `${size.width}×${size.height}`
-                    })()
-                  : ''}
-              </span>
-            </button>
-          ))}
+          {PNG_SCALES.map((scale) => {
+            const size = preview ? pngSize(preview, scale) : null
+            // A scale a browser canvas cannot allocate is disabled here rather
+            // than failing on click. The size is already on the button, so the
+            // reason is visible; the tooltip says what to do instead.
+            const tooBig = size ? pngSizeError(size) : null
+            return (
+              <button
+                key={scale}
+                type="button"
+                className="export__item"
+                data-testid={`export-png-${scale}x`}
+                role="menuitem"
+                disabled={busy || tooBig !== null}
+                title={tooBig ?? undefined}
+                onClick={() => {
+                  void savePng(scale)
+                }}
+              >
+                {`PNG ${scale}×`}
+                <span className="export__hint">
+                  {size ? `${String(size.width)}×${String(size.height)}` : ''}
+                </span>
+              </button>
+            )
+          })}
 
           <label className="export__option" htmlFor={backgroundId}>
             <input

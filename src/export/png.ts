@@ -46,6 +46,47 @@ export function pngSize(
   }
 }
 
+/**
+ * How big a canvas the guard below is willing to ask for.
+ *
+ * Deliberately conservative rather than per-browser. There is no way to ask a
+ * browser what its limit is — the only honest test is to allocate a canvas and
+ * see whether it comes back broken — and the numbers vary by engine, platform
+ * and available memory. Chrome and Firefox cap a side at 32767 and the area
+ * near 2^28 pixels; Safari on iOS has historically been far lower. 16384 and
+ * 2^28 sit inside every one of them.
+ */
+export const MAX_PNG_DIMENSION = 16384
+export const MAX_PNG_AREA = 268_435_456
+
+/**
+ * Why a size cannot be rasterised, or `null` if it can.
+ *
+ * **Checked up front rather than discovered.** Assigning an oversized
+ * `canvas.width` does not throw: the canvas comes back unusable and `toBlob`
+ * hands over `null`, which this module already turns into "The canvas produced
+ * no image". That message is true and useless — it describes the symptom, says
+ * nothing about the cause, and leaves the user with no idea that 1x would have
+ * worked. Refusing early costs two comparisons and lets the message name the
+ * actual problem and the actual remedy.
+ */
+export function pngSizeError(size: { width: number; height: number }): string | null {
+  const fits =
+    size.width <= MAX_PNG_DIMENSION &&
+    size.height <= MAX_PNG_DIMENSION &&
+    size.width * size.height <= MAX_PNG_AREA
+  if (fits) return null
+
+  const limit = `${String(MAX_PNG_DIMENSION)}px per side and ${String(
+    MAX_PNG_AREA / 1_000_000,
+  )} megapixels`
+  return (
+    `This diagram is ${String(size.width)}×${String(size.height)} at that scale, ` +
+    `past the ${limit} a browser canvas allows. ` +
+    `Try a smaller scale, or export SVG — it has no size limit.`
+  )
+}
+
 /** Loads the markup as an image, via a blob URL that is always revoked. */
 function loadImage(markup: string): Promise<{ image: HTMLImageElement; url: string }> {
   const blob = new Blob([markup], { type: 'image/svg+xml;charset=utf-8' })
@@ -86,7 +127,11 @@ export async function renderPng(
   svg: SvgExport,
   { scale, background }: PngOptions,
 ): Promise<Blob> {
-  const { width, height } = pngSize(svg, scale)
+  const size = pngSize(svg, scale)
+  const tooBig = pngSizeError(size)
+  if (tooBig) throw new Error(tooBig)
+
+  const { width, height } = size
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height

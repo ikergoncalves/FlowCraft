@@ -79,11 +79,7 @@ describe('connectionBounds', () => {
         const source = block('s', 0, 0)
         const target = block('t', dx, dy)
         const bounds = connectionBounds(source, target)
-        const points = routeConnection(
-          source,
-          target,
-          resolveAnchors({}, source, target),
-        )
+        const points = routeConnection(source, target, resolveAnchors({}, source, target))
         for (const point of points) {
           expect(point.x).toBeGreaterThanOrEqual(bounds.x)
           expect(point.y).toBeGreaterThanOrEqual(bounds.y)

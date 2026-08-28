@@ -2,9 +2,29 @@
   "name": "flowcraft",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
   "description": "Browser-based diagram editor built from scratch - custom drag-and-drop, undo/redo, and connection routing on SVG. No backend required.",
+  "keywords": [
+    "diagram",
+    "flowchart",
+    "editor",
+    "svg",
+    "react",
+    "typescript",
+    "undo-redo",
+    "canvas"
+  ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikergoncalves/FlowCraft.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ikergoncalves/FlowCraft/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

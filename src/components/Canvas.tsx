@@ -12,6 +12,7 @@ import { useCanvasRect } from '../hooks/useCanvasRect'
 import { useSpaceKey } from '../hooks/useSpaceKey'
 import type { CanvasRect } from '../types'
 import { GRID_SIZE, gridStepForZoom, screenToWorld, viewBoxFor } from '../utils/coords'
+import { visibleBlocks, visibleConnections, visibleWorldRect } from '../utils/culling'
 import { makeBlockAt } from '../utils/blocks'
 import { groupOf, selectedGroups } from '../utils/groups'
 import { commitBlockText, createBlock } from '../history/actions'
@@ -86,7 +87,34 @@ export function Canvas() {
     [groupMap, groupOrder, selectedIds],
   )
   // One arrowhead marker per colour in use, not one per arrow.
+  //
+  // Deliberately over *every* connection rather than the visible ones: a
+  // marker is a few bytes in `<defs>`, and deriving them from the culled list
+  // would rebuild the definitions on every pan, invalidating each arrow's
+  // `marker-end` reference for the frame in between.
   const markerStrokes = useMemo(() => arrowMarkerStrokes(connections), [connections])
+
+  /*
+   * Viewport culling. See `utils/culling.ts` for the rules; the short version
+   * is that this decides what is in the DOM and nothing else — the store, the
+   * export, the save and the marquee all still see the whole document.
+   */
+  const view = useMemo(() => visibleWorldRect(viewport, rect), [viewport, rect])
+  const drawnBlocks = useMemo(
+    () => visibleBlocks(blocks, view, selectedSet),
+    [blocks, view, selectedSet],
+  )
+  const drawnConnections = useMemo(
+    () =>
+      visibleConnections(
+        connections,
+        blockById,
+        view,
+        selectedSet,
+        selectedConnectionSet,
+      ),
+    [connections, blockById, view, selectedSet, selectedConnectionSet],
+  )
 
   /**
    * Tracks the hovered block from `pointerover`, which bubbles and fires only
@@ -264,11 +292,11 @@ export function Canvas() {
         />
 
         {/* Under the blocks, so an arrow never covers the box it points at. */}
-        {connections.map((connection) => {
+        {drawnConnections.map((connection) => {
+          // Both endpoints are known to exist: `visibleConnections` has
+          // already dropped any arrow whose blocks are gone.
           const source = blockById.get(connection.sourceId)
           const target = blockById.get(connection.targetId)
-          // A dangling connection cannot happen — removing a block cascades —
-          // but rendering nothing is cheaper than trusting that at paint time.
           if (!source || !target) return null
           return (
             <ConnectionView
@@ -282,7 +310,7 @@ export function Canvas() {
           )
         })}
 
-        {blocks.map((block) => (
+        {drawnBlocks.map((block) => (
           <BlockView
             key={block.id}
             block={block}

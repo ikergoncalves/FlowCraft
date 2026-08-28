@@ -124,7 +124,10 @@ class CdpSession {
    */
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', {
-      expression: `(() => { ${expression} })()`,
+      // Async, so a probe may `await` in its own body. `awaitPromise` below
+      // then resolves whatever it returns, and reports a rejection as an
+      // exception rather than as a value.
+      expression: `(async () => { ${expression} })()`,
       returnByValue: true,
       awaitPromise: true,
     })
@@ -303,6 +306,27 @@ export class Page {
   }
 
   /**
+   * Runs a script in every document this page loads, before anything in it.
+   *
+   * A cold-load measurement cannot be taken from outside: polling from the
+   * harness has a 50ms floor and the whole load is not much more than that.
+   * This is the only way to have a stopwatch already running when the page
+   * starts.
+   */
+  addInitScript(source) {
+    return this.session.send('Page.addScriptToEvaluateOnNewDocument', { source })
+  }
+
+  /** A PNG of the viewport, as a Buffer. Used to capture the README frames. */
+  async screenshot() {
+    const result = await this.session.send('Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: false,
+    })
+    return Buffer.from(result.data, 'base64')
+  }
+
+  /**
    * A press-move-release drag, moved in steps.
    *
    * Real drags arrive as many small moves, and the number of steps is exactly
@@ -334,17 +358,38 @@ export class Page {
  * dev`, which on Windows means no shell, no PATH resolution and no orphaned
  * child process to reap.
  */
-export async function withBrowser(run) {
-  const { createServer } = await import('vite')
-  const server = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname.replace(
-      /^\/([A-Za-z]:)/,
-      '$1',
-    ),
-    server: { port: 0, strictPort: false },
-    logLevel: 'error',
-  })
-  await server.listen()
+export async function withBrowser(run, { serve = 'dev', onPage } = {}) {
+  const configFile = new URL('../vite.config.ts', import.meta.url).pathname.replace(
+    /^\/([A-Za-z]:)/,
+    '$1',
+  )
+  /*
+   * Dev server, or a preview of the built bundle.
+   *
+   * Correctness checks run against `dev`: it is what a developer edits and it
+   * gives readable stack traces. Measurements run against `preview`, because
+   * React's development build renders every component twice under StrictMode
+   * and keeps all of its warnings — timing it would produce numbers that
+   * describe a program nobody runs.
+   */
+  const vite = await import('vite')
+  const server =
+    serve === 'preview'
+      ? await vite.preview({
+          configFile,
+          preview: { port: 0, strictPort: false },
+          logLevel: 'error',
+        })
+      : await vite
+          .createServer({
+            configFile,
+            server: { port: 0, strictPort: false },
+            logLevel: 'error',
+          })
+          .then(async (dev) => {
+            await dev.listen()
+            return dev
+          })
   const url = server.resolvedUrls?.local?.[0]
   if (!url) throw new Error('Vite did not report a local URL')
 
@@ -401,6 +446,9 @@ export async function withBrowser(run) {
     await session.send('Page.bringToFront').catch(() => {})
 
     const page = new Page(session)
+    // A caller that needs a probe installed before the app's first byte runs
+    // gets its chance here, while the tab is still on about:blank.
+    await onPage?.(page)
     // The app is a single mounted React tree; waiting on the canvas is a
     // stronger signal than the load event, which fires before hydration.
     await waitFor(

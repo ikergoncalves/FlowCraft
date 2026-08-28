@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { installBridge } from './dev/bridge'
 import { startPersistence } from './persistence/session'
 import { installThemeStyles } from './theme/stylesheet'
 import { initialTheme, useThemeStore } from './theme/themeStore'
@@ -44,3 +45,10 @@ createRoot(container).render(
  * belongs to the application: see the note at the top of `session.ts`.
  */
 void startPersistence()
+
+/*
+ * The debug bridge, last of all: it is inert until something calls it, so it
+ * neither holds up the paint nor participates in startup. See `dev/bridge.ts`
+ * for why it ships in the production bundle rather than behind a dev flag.
+ */
+installBridge(window)

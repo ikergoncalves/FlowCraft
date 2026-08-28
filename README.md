@@ -5,7 +5,8 @@ account, no upload — your diagram never leaves the tab.
 
 ![FlowCraft: creating blocks, wiring them together, styling, grouping, undoing and exporting](docs/demo.gif)
 
-**[Try it →](DEPLOY_URL_PLACEHOLDER)**
+Not deployed yet — `npm install && npm run dev` runs it locally in two
+commands, and [DEPLOY.md](DEPLOY.md) has the hosting configuration ready to go.
 
 Built from scratch on SVG: the drag-and-drop, the orthogonal connection
 routing, the undo/redo, the grouping and the export are all first-party code,
@@ -157,6 +158,9 @@ ones:
 
 ## Deploying
 
+**Not yet deployed.** The configuration and the verification are in place; the
+hosting account is not.
+
 `npm run build` produces a static `dist/`. `vercel.json` configures Vercel;
 [DEPLOY.md](DEPLOY.md) covers the four things a host can quietly break — secure
 context, CSP, MIME types and SPA fallback — and the smoke spec that checks all
@@ -205,7 +209,8 @@ obstacles.
 
 ## Status
 
-**Complete.** Built in seven phases:
+**Feature-complete**, with the public deployment as the one outstanding item.
+Built in seven phases:
 
 1. ✅ Project setup, SVG canvas with pan/zoom, block creation
 2. ✅ Drag-and-drop, multi-select, resizing
@@ -213,7 +218,7 @@ obstacles.
 4. ✅ Undo/redo (command pattern), keyboard shortcuts
 5. ✅ Element styling, grouping
 6. ✅ PNG/SVG export, IndexedDB auto-save, dark/light themes
-7. ✅ Performance, Playwright E2E, deploy, documentation
+7. ✅ Performance, Playwright E2E, documentation — deploy still pending
 
 ## License
 

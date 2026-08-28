@@ -188,6 +188,7 @@ const KEYS = {
   ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', vk: 40 },
   Delete: { key: 'Delete', code: 'Delete', vk: 46 },
   Escape: { key: 'Escape', code: 'Escape', vk: 27 },
+  Enter: { key: 'Enter', code: 'Enter', vk: 13 },
 }
 
 export class Page {
@@ -280,6 +281,18 @@ export class Page {
         : {}),
     })
     await this.session.send('Input.dispatchKeyEvent', { ...base, type: 'keyUp' })
+    await this.settle()
+  }
+
+  /**
+   * Types a string into whatever has focus.
+   *
+   * `Input.insertText` rather than a keydown per character: it produces the
+   * `input` event React's `onChange` listens for, without needing a key table
+   * entry for every letter of every label the demo happens to use.
+   */
+  async typeText(text) {
+    await this.session.send('Input.insertText', { text })
     await this.settle()
   }
 
